@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using Music.Data;
 using Music.Models;
+using Music.Services;
 
 namespace Music.Controllers;
 
@@ -10,10 +11,12 @@ namespace Music.Controllers;
 public class SongsController : ControllerBase
 {
     private readonly MongoDbContext _context;
+    private readonly IAzureBlobService _blobService;
 
-    public SongsController(MongoDbContext context)
+    public SongsController(MongoDbContext context, IAzureBlobService blobService)
     {
         _context = context;
+        _blobService = blobService;
     }
 
     [HttpGet]
@@ -34,7 +37,8 @@ public class SongsController : ControllerBase
             FileUrl = s.FileUrl,
             SnippetUrl = s.SnippetUrl,
             CoverUrl = s.CoverUrl,
-            CreatedAt = s.CreatedAt
+            CreatedAt = s.CreatedAt,
+            ReleaseDate = s.ReleaseDate
         }).ToList();
 
         return Ok(songDtos);
@@ -63,7 +67,8 @@ public class SongsController : ControllerBase
             FileUrl = song.FileUrl,
             SnippetUrl = song.SnippetUrl,
             CoverUrl = song.CoverUrl,
-            CreatedAt = song.CreatedAt
+            CreatedAt = song.CreatedAt,
+            ReleaseDate = song.ReleaseDate
         };
 
         return Ok(songDto);
@@ -81,7 +86,8 @@ public class SongsController : ControllerBase
             Album = dto.Album,
             FileUrl = dto.FileUrl,
             SnippetUrl = dto.SnippetUrl,
-            CoverUrl = dto.CoverUrl
+            CoverUrl = dto.CoverUrl,
+            ReleaseDate = dto.ReleaseDate
         };
 
         await _context.Songs.InsertOneAsync(song);
@@ -97,17 +103,116 @@ public class SongsController : ControllerBase
             FileUrl = song.FileUrl,
             SnippetUrl = song.SnippetUrl,
             CoverUrl = song.CoverUrl,
-            CreatedAt = song.CreatedAt
+            CreatedAt = song.CreatedAt,
+            ReleaseDate = song.ReleaseDate
         };
 
         return CreatedAtAction(nameof(GetSong), new { id = song.Id }, songDto);
     }
 
+    [HttpPost("{id}/upload-file")]
+    public async Task<IActionResult> UploadSongFile(string id, IFormFile audioFile)
+    {
+        if (audioFile == null || audioFile.Length == 0)
+        {
+            return BadRequest("No audio file provided");
+        }
+
+        var song = await _context.Songs
+            .Find(s => s.Id == id)
+            .FirstOrDefaultAsync();
+
+        if (song == null)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            using var stream = audioFile.OpenReadStream();
+            var fileUrl = await _blobService.UploadSongAsync(id, stream, audioFile.FileName);
+
+            var updateDefinition = Builders<Song>.Update.Set(s => s.FileUrl, fileUrl);
+            await _context.Songs.UpdateOneAsync(s => s.Id == id, updateDefinition);
+
+            return Ok(new { fileUrl });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Error uploading file: {ex.Message}");
+        }
+    }
+
+    [HttpPost("{id}/upload-cover")]
+    public async Task<IActionResult> UploadSongCover(string id, IFormFile imageFile)
+    {
+        if (imageFile == null || imageFile.Length == 0)
+        {
+            return BadRequest("No image file provided");
+        }
+
+        var song = await _context.Songs
+            .Find(s => s.Id == id)
+            .FirstOrDefaultAsync();
+
+        if (song == null)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            using var stream = imageFile.OpenReadStream();
+            var coverUrl = await _blobService.UploadSongCoverAsync(id, stream, imageFile.FileName);
+
+            var updateDefinition = Builders<Song>.Update.Set(s => s.CoverUrl, coverUrl);
+            await _context.Songs.UpdateOneAsync(s => s.Id == id, updateDefinition);
+
+            return Ok(new { coverUrl });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Error uploading cover: {ex.Message}");
+        }
+    }
+
+    [HttpPost("{id}/upload-snippet")]
+    public async Task<IActionResult> UploadSongSnippet(string id, IFormFile audioFile)
+    {
+        if (audioFile == null || audioFile.Length == 0)
+        {
+            return BadRequest("No audio file provided");
+        }
+
+        var song = await _context.Songs
+            .Find(s => s.Id == id)
+            .FirstOrDefaultAsync();
+
+        if (song == null)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            using var stream = audioFile.OpenReadStream();
+            var snippetUrl = await _blobService.UploadSongSnippetAsync(id, stream, audioFile.FileName);
+
+            var updateDefinition = Builders<Song>.Update.Set(s => s.SnippetUrl, snippetUrl);
+            await _context.Songs.UpdateOneAsync(s => s.Id == id, updateDefinition);
+
+            return Ok(new { snippetUrl });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Error uploading snippet: {ex.Message}");
+        }
+    }
+
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateSong(string id, UpdateSongDto dto)
     {
-        var updateDefinition = Builders<Song>.Update
-            .Set(s => s.UpdatedAt, DateTime.UtcNow);
+        var updateDefinition = Builders<Song>.Update.Set("placeholder", "placeholder");
 
         if (!string.IsNullOrEmpty(dto.Title))
             updateDefinition = updateDefinition.Set(s => s.Title, dto.Title);
@@ -132,6 +237,9 @@ public class SongsController : ControllerBase
 
         if (!string.IsNullOrEmpty(dto.CoverUrl))
             updateDefinition = updateDefinition.Set(s => s.CoverUrl, dto.CoverUrl);
+
+        if (dto.ReleaseDate.HasValue)
+            updateDefinition = updateDefinition.Set(s => s.ReleaseDate, dto.ReleaseDate.Value);
 
         var result = await _context.Songs.UpdateOneAsync(
             s => s.Id == id,
@@ -168,9 +276,10 @@ public class SongDto
     public int DurationSec { get; set; }
     public AlbumReference? Album { get; set; }
     public string FileUrl { get; set; } = string.Empty;
-    public string SnippetUrl { get; set; } = string.Empty;
+    public string? SnippetUrl { get; set; }
     public string CoverUrl { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
+    public DateTime? ReleaseDate { get; set; }
 }
 
 public class CreateSongDto
@@ -181,8 +290,9 @@ public class CreateSongDto
     public int DurationSec { get; set; }
     public AlbumReference? Album { get; set; }
     public string FileUrl { get; set; } = string.Empty;
-    public string SnippetUrl { get; set; } = string.Empty;
+    public string? SnippetUrl { get; set; }
     public string CoverUrl { get; set; } = string.Empty;
+    public DateTime? ReleaseDate { get; set; }
 }
 
 public class UpdateSongDto
@@ -195,4 +305,5 @@ public class UpdateSongDto
     public string? FileUrl { get; set; }
     public string? SnippetUrl { get; set; }
     public string? CoverUrl { get; set; }
+    public DateTime? ReleaseDate { get; set; }
 } 

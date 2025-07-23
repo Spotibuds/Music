@@ -28,7 +28,7 @@ public class Song
     public string FileUrl { get; set; } = string.Empty;
 
     [BsonElement("snippetUrl")]
-    public string SnippetUrl { get; set; } = string.Empty;
+    public string? SnippetUrl { get; set; }
 
     [BsonElement("coverUrl")]
     public string CoverUrl { get; set; } = string.Empty;
@@ -36,18 +36,24 @@ public class Song
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    [BsonElement("updatedAt")]
-    public DateTime? UpdatedAt { get; set; }
+    [BsonElement("releaseDate")]
+    public DateTime? ReleaseDate { get; set; }
 }
 
 public class ArtistReference
 {
     [BsonElement("id")]
     public string Id { get; set; } = string.Empty;
+
+    [BsonElement("name")]
+    public string Name { get; set; } = string.Empty;
 }
 
 public class AlbumReference
 {
     [BsonElement("id")]
     public string Id { get; set; } = string.Empty;
+
+    [BsonElement("title")]
+    public string Title { get; set; } = string.Empty;
 } 
