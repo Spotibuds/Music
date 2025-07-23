@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using Music.Data;
 using Music.Models;
+using Music.Services;
 
 namespace Music.Controllers;
 
@@ -10,10 +11,12 @@ namespace Music.Controllers;
 public class ArtistsController : ControllerBase
 {
     private readonly MongoDbContext _context;
+    private readonly IAzureBlobService _blobService;
 
-    public ArtistsController(MongoDbContext context)
+    public ArtistsController(MongoDbContext context, IAzureBlobService blobService)
     {
         _context = context;
+        _blobService = blobService;
     }
 
     [HttpGet]
@@ -67,8 +70,7 @@ public class ArtistsController : ControllerBase
         var artist = new Artist
         {
             Name = dto.Name,
-            Bio = dto.Bio,
-            ImageUrl = dto.ImageUrl
+            Bio = dto.Bio
         };
 
         await _context.Artists.InsertOneAsync(artist);
@@ -89,17 +91,13 @@ public class ArtistsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateArtist(string id, UpdateArtistDto dto)
     {
-        var updateDefinition = Builders<Artist>.Update
-            .Set(a => a.UpdatedAt, DateTime.UtcNow);
+        var updateDefinition = Builders<Artist>.Update.Set("placeholder", "placeholder");
 
         if (!string.IsNullOrEmpty(dto.Name))
             updateDefinition = updateDefinition.Set(a => a.Name, dto.Name);
 
-        if (!string.IsNullOrEmpty(dto.Bio))
+        if (dto.Bio != null)
             updateDefinition = updateDefinition.Set(a => a.Bio, dto.Bio);
-
-        if (!string.IsNullOrEmpty(dto.ImageUrl))
-            updateDefinition = updateDefinition.Set(a => a.ImageUrl, dto.ImageUrl);
 
         var result = await _context.Artists.UpdateOneAsync(
             a => a.Id == id,
@@ -111,6 +109,39 @@ public class ArtistsController : ControllerBase
         }
 
         return NoContent();
+    }
+
+    [HttpPost("{id}/image")]
+    public async Task<IActionResult> UploadArtistImage(string id, IFormFile image)
+    {
+        if (image == null || image.Length == 0)
+        {
+            return BadRequest("No image file provided");
+        }
+
+        var artist = await _context.Artists
+            .Find(a => a.Id == id)
+            .FirstOrDefaultAsync();
+
+        if (artist == null)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            using var stream = image.OpenReadStream();
+            var imageUrl = await _blobService.UploadArtistImageAsync(id, stream, image.FileName);
+
+            var updateDefinition = Builders<Artist>.Update.Set(a => a.ImageUrl, imageUrl);
+            await _context.Artists.UpdateOneAsync(a => a.Id == id, updateDefinition);
+
+            return Ok(new { imageUrl });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Error uploading image: {ex.Message}");
+        }
     }
 
     [HttpDelete("{id}")]
@@ -131,8 +162,8 @@ public class ArtistDto
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public string Bio { get; set; } = string.Empty;
-    public string ImageUrl { get; set; } = string.Empty;
+    public string? Bio { get; set; }
+    public string? ImageUrl { get; set; }
     public List<AlbumReference> Albums { get; set; } = new();
     public DateTime CreatedAt { get; set; }
 }
@@ -140,13 +171,11 @@ public class ArtistDto
 public class CreateArtistDto
 {
     public string Name { get; set; } = string.Empty;
-    public string Bio { get; set; } = string.Empty;
-    public string ImageUrl { get; set; } = string.Empty;
+    public string? Bio { get; set; }
 }
 
 public class UpdateArtistDto
 {
     public string? Name { get; set; }
     public string? Bio { get; set; }
-    public string? ImageUrl { get; set; }
 } 

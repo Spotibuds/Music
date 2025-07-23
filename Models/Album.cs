@@ -16,23 +16,26 @@ public class Album
     public List<SongReference> Songs { get; set; } = new();
 
     [BsonElement("artist")]
-    public ArtistReference Artist { get; set; } = new();
+    public ArtistReference? Artist { get; set; }
 
     [BsonElement("coverUrl")]
-    public string CoverUrl { get; set; } = string.Empty;
+    public string? CoverUrl { get; set; }
 
     [BsonElement("releaseDate")]
     public DateTime? ReleaseDate { get; set; }
 
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
-    [BsonElement("updatedAt")]
-    public DateTime? UpdatedAt { get; set; }
 }
 
 public class SongReference
 {
     [BsonElement("id")]
     public string Id { get; set; } = string.Empty;
+
+    [BsonElement("position")]
+    public int Position { get; set; }
+
+    [BsonElement("addedAt")]
+    public DateTime AddedAt { get; set; } = DateTime.UtcNow;
 } 
