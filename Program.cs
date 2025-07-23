@@ -10,7 +10,11 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 // Add Redis for distributed caching
-var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
+    ?? Environment.GetEnvironmentVariable("ConnectionStrings__Redis");
+
+Console.WriteLine($"Redis Connection String: {redisConnectionString}");
+
 if (string.IsNullOrEmpty(redisConnectionString))
 {
     throw new InvalidOperationException("Redis connection string not found");
@@ -35,7 +39,8 @@ builder.Services.AddMemoryCache(options =>
 
 builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("MongoDb");
+    var connectionString = builder.Configuration.GetConnectionString("MongoDb")
+    ?? Environment.GetEnvironmentVariable("ConnectionStrings__MongoDb");
 
 // Fix auth mechanism if it's set to DEFAULT
 if (!string.IsNullOrEmpty(connectionString) && connectionString.Contains("authMechanism=DEFAULT"))
