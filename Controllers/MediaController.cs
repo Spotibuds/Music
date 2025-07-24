@@ -3,6 +3,8 @@ using Microsoft.Extensions.Caching.Memory;
 using Music.Services;
 using StackExchange.Redis;
 using System.IO.Compression;
+using Azure;
+using Azure.Storage.Blobs.Models;
 
 namespace Music.Controllers;
 
@@ -172,24 +174,64 @@ var verify = await _redisDatabase.StringGetAsync(cacheKey);
             var containerName = pathSegments[0];
             var blobName = string.Join("/", pathSegments.Skip(1));
 
-            // Download the audio from Azure Blob Storage
-            var audioStream = await _blobService.DownloadFileAsync(containerName, blobName);
+            // Get blob client for direct access
+            var containerClient = _blobService.GetBlobContainerClient(containerName);
+            var blobClient = containerClient.GetBlobClient(blobName);
+            
+            // Get blob properties to support range requests
+            var blobProperties = await blobClient.GetPropertiesAsync();
+            var fileSize = blobProperties.Value.ContentLength;
             
             // Determine content type based on file extension
             var contentType = GetAudioContentType(blobName);
             
-            // Set headers for audio streaming with caching
+            // Set headers for audio streaming with proper range support
             Response.Headers["Accept-Ranges"] = "bytes";
             Response.Headers["Access-Control-Allow-Origin"] = "*";
-            Response.Headers["Access-Control-Allow-Headers"] = "Range";
+            Response.Headers["Access-Control-Allow-Headers"] = "Range, Content-Range, Content-Length";
+            Response.Headers["Access-Control-Expose-Headers"] = "Content-Range, Content-Length, Accept-Ranges";
             Response.Headers["Cache-Control"] = "public, max-age=3600"; // 1 hour cache
+            Response.Headers["Content-Length"] = fileSize.ToString();
+            
+            // Handle range requests for seeking support
+            var rangeHeader = Request.Headers["Range"].FirstOrDefault();
+            if (!string.IsNullOrEmpty(rangeHeader) && rangeHeader.StartsWith("bytes="))
+            {
+                var range = rangeHeader.Substring(6).Split('-');
+                if (range.Length == 2)
+                {
+                    long.TryParse(range[0], out var start);
+                    long.TryParse(range[1], out var end);
+                    
+                    if (end == 0 || end >= fileSize)
+                        end = fileSize - 1;
+                    
+                    var length = end - start + 1;
+                    
+                    // Download specific range from blob
+                    var downloadOptions = new BlobDownloadOptions
+                    {
+                        Range = new Azure.HttpRange(start, length)
+                    };
+                    var rangeStream = await blobClient.DownloadStreamingAsync(downloadOptions);
+                    
+                    Response.StatusCode = 206; // Partial Content
+                    Response.Headers["Content-Range"] = $"bytes {start}-{end}/{fileSize}";
+                    Response.Headers["Content-Length"] = length.ToString();
+                    
+                    return File(rangeStream.Value.Content, contentType, enableRangeProcessing: false);
+                }
+            }
+            
+            // Download the full audio file if no range requested
+            var audioStream = await _blobService.DownloadFileAsync(containerName, blobName);
             
             return File(audioStream, contentType, enableRangeProcessing: true);
         }
         catch (Exception ex)
-{
-    return NotFound("Audio not found");
-}
+        {
+            return NotFound("Audio not found");
+        }
     }
 
     private static string GetAudioContentType(string fileName)
