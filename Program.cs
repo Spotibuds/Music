@@ -90,7 +90,7 @@ builder.Services.AddCors(options =>
 });
 
 // Make the app listen on port 80 for Azure compatibility
-builder.WebHost.UseUrls("http://0.0.0.0:81");
+builder.WebHost.UseUrls("http://0.0.0.0:80");
 
 var app = builder.Build();
 
