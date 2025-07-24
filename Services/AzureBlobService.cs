@@ -13,6 +13,7 @@ public interface IAzureBlobService
     Task<Stream> DownloadFileAsync(string containerName, string blobName);
     Task<bool> DeleteFileAsync(string containerName, string blobName);
     Task<List<string>> ListFilesAsync(string containerName, string prefix = "");
+    BlobContainerClient GetBlobContainerClient(string containerName);
 }
 
 public class AzureBlobService : IAzureBlobService
@@ -137,4 +138,9 @@ public class AzureBlobService : IAzureBlobService
 
         return blobs;
     }
-} 
+
+    public BlobContainerClient GetBlobContainerClient(string containerName)
+    {
+        return _blobServiceClient.GetBlobContainerClient(containerName);
+    }
+}
