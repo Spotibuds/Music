@@ -49,7 +49,6 @@ public class MediaController : ControllerBase
                     
                     var redisImageBytes = (byte[])redisImage!;
                     
-                    // Also cache in memory for even faster access
                     var memoryCacheOptions = new MemoryCacheEntryOptions
                     {
                         SlidingExpiration = TimeSpan.FromMinutes(30),
@@ -63,17 +62,13 @@ public class MediaController : ControllerBase
             }
             catch (Exception redisEx)
 {
-    // Redis cache error - continue with fallback
 }
             
-            // 2. Check memory cache as fallback
             if (_memoryCache.TryGetValue(cacheKey, out byte[]? cachedImage) && cachedImage != null)
             {
-                
                 return File(cachedImage, GetContentType(url), enableRangeProcessing: false);
             }
 
-            // 3. Download from Azure Blob Storage
             var uri = new Uri(url);
             var pathSegments = uri.AbsolutePath.TrimStart('/').Split('/');
             
@@ -85,33 +80,22 @@ public class MediaController : ControllerBase
             var containerName = pathSegments[0];
             var blobName = string.Join("/", pathSegments.Skip(1));
 
-            
-
-            // Download the image from Azure Blob Storage
             var imageStream = await _blobService.DownloadFileAsync(containerName, blobName);
             
-            // Read stream into memory for caching
             using var memoryStream = new MemoryStream();
             await imageStream.CopyToAsync(memoryStream);
             var imageBytes = memoryStream.ToArray();
 
-            // 4. Cache in both Redis and Memory (async, don't block response)
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    // Cache in Redis for 6 hours
-                    var success = await _redisDatabase.StringSetAsync(cacheKey, imageBytes, TimeSpan.FromHours(6));
-
-// Verify it was stored
-var verify = await _redisDatabase.StringGetAsync(cacheKey);
+                    await _redisDatabase.StringSetAsync(cacheKey, imageBytes, TimeSpan.FromHours(6));
                 }
                 catch (Exception ex)
 {
-    // Redis cache error - continue with memory cache
-}
+                }
                 
-                // Cache in memory for 1 hour
                 var cacheOptions = new MemoryCacheEntryOptions
                 {
                     SlidingExpiration = TimeSpan.FromHours(1),
@@ -119,14 +103,11 @@ var verify = await _redisDatabase.StringGetAsync(cacheKey);
                     Priority = CacheItemPriority.Normal
                 };
                 _memoryCache.Set(cacheKey, imageBytes, cacheOptions);
-                
             });
 
-            // Determine content type based on file extension
             var contentType = GetContentType(blobName);
             
-            // Set aggressive cache headers for browser caching
-            Response.Headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800"; // 1 day cache, 1 week stale
+            Response.Headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800";
             Response.Headers["Access-Control-Allow-Origin"] = "*";
             Response.Headers["ETag"] = $"\"{url.GetHashCode()}\"";
             
@@ -182,7 +163,6 @@ var verify = await _redisDatabase.StringGetAsync(cacheKey);
             var blobProperties = await blobClient.GetPropertiesAsync();
             var fileSize = blobProperties.Value.ContentLength;
             
-            // Determine content type based on file extension
             var contentType = GetAudioContentType(blobName);
             
             // Set headers for audio streaming with proper range support
@@ -223,7 +203,6 @@ var verify = await _redisDatabase.StringGetAsync(cacheKey);
                 }
             }
             
-            // Download the full audio file if no range requested
             var audioStream = await _blobService.DownloadFileAsync(containerName, blobName);
             
             return File(audioStream, contentType, enableRangeProcessing: true);
@@ -295,5 +274,12 @@ var verify = await _redisDatabase.StringGetAsync(cacheKey);
         {
             return Ok(new { Error = ex.Message });
         }
+    }
+
+    [HttpGet("test")]
+    public IActionResult Test()
+    {
+        Response.Headers["Access-Control-Allow-Origin"] = "*";
+        return Ok(new { message = "Media controller is working", timestamp = DateTime.UtcNow });
     }
 } 

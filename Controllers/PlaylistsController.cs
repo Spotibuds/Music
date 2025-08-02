@@ -19,6 +19,11 @@ public class PlaylistsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<PlaylistDto>>> GetPlaylists()
     {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var playlists = await _context.Playlists
             .Find(_ => true)
             .ToListAsync();
@@ -39,6 +44,11 @@ public class PlaylistsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<ActionResult<PlaylistDto>> GetPlaylist(string id)
     {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var playlist = await _context.Playlists
             .Find(p => p.Id == id)
             .FirstOrDefaultAsync();
@@ -61,35 +71,14 @@ public class PlaylistsController : ControllerBase
         return Ok(playlistDto);
     }
 
-    [HttpGet("{id}/songs")]
-    public async Task<ActionResult<IEnumerable<Song>>> GetPlaylistSongs(string id)
-    {
-        var playlist = await _context.Playlists
-            .Find(p => p.Id == id)
-            .FirstOrDefaultAsync();
-
-        if (playlist == null)
-        {
-            return NotFound();
-        }
-
-        var songIds = playlist.Songs.OrderBy(s => s.Position).Select(s => s.Id).ToList();
-        var songs = await _context.Songs
-            .Find(s => songIds.Contains(s.Id))
-            .ToListAsync();
-
-        // Sort songs by their position in the playlist
-        var orderedSongs = songIds
-            .Select(id => songs.FirstOrDefault(s => s.Id == id))
-            .Where(s => s != null)
-            .ToList();
-
-        return Ok(orderedSongs);
-    }
-
     [HttpPost]
     public async Task<ActionResult<PlaylistDto>> CreatePlaylist(CreatePlaylistDto dto)
     {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var playlist = new Playlist
         {
             Name = dto.Name,
@@ -111,9 +100,42 @@ public class PlaylistsController : ControllerBase
         return CreatedAtAction(nameof(GetPlaylist), new { id = playlist.Id }, playlistDto);
     }
 
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdatePlaylist(string id, UpdatePlaylistDto dto)
+    {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
+        var updateDefinition = Builders<Playlist>.Update.Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+        if (!string.IsNullOrEmpty(dto.Name))
+            updateDefinition = updateDefinition.Set(p => p.Name, dto.Name);
+
+        if (dto.Description != null)
+            updateDefinition = updateDefinition.Set(p => p.Description, dto.Description);
+
+        var result = await _context.Playlists.UpdateOneAsync(
+            p => p.Id == id,
+            updateDefinition);
+
+        if (result.MatchedCount == 0)
+        {
+            return NotFound();
+        }
+
+        return NoContent();
+    }
+
     [HttpPost("{playlistId}/songs/{songId}")]
     public async Task<IActionResult> AddSongToPlaylist(string playlistId, string songId, [FromQuery] int position = -1)
     {
+        if (!_context.IsConnected || _context.Playlists == null || _context.Songs == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var playlist = await _context.Playlists
             .Find(p => p.Id == playlistId)
             .FirstOrDefaultAsync();
@@ -171,6 +193,11 @@ public class PlaylistsController : ControllerBase
     [HttpDelete("{playlistId}/songs/{songId}")]
     public async Task<IActionResult> RemoveSongFromPlaylist(string playlistId, string songId)
     {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var updateDefinition = Builders<Playlist>.Update
             .PullFilter(p => p.Songs, s => s.Id == songId)
             .Set(p => p.UpdatedAt, DateTime.UtcNow);
@@ -185,64 +212,14 @@ public class PlaylistsController : ControllerBase
         return NoContent();
     }
 
-    [HttpPut("{id}")]
-    public async Task<IActionResult> UpdatePlaylist(string id, UpdatePlaylistDto dto)
-    {
-        var updateDefinition = Builders<Playlist>.Update.Set(p => p.UpdatedAt, DateTime.UtcNow);
-
-        if (!string.IsNullOrEmpty(dto.Name))
-            updateDefinition = updateDefinition.Set(p => p.Name, dto.Name);
-
-        if (dto.Description != null)
-            updateDefinition = updateDefinition.Set(p => p.Description, dto.Description);
-
-        var result = await _context.Playlists.UpdateOneAsync(
-            p => p.Id == id,
-            updateDefinition);
-
-        if (result.MatchedCount == 0)
-        {
-            return NotFound();
-        }
-
-        return NoContent();
-    }
-
-    [HttpPut("{id}/reorder")]
-    public async Task<IActionResult> ReorderPlaylistSongs(string id, ReorderSongsDto dto)
-    {
-        var playlist = await _context.Playlists
-            .Find(p => p.Id == id)
-            .FirstOrDefaultAsync();
-
-        if (playlist == null)
-        {
-            return NotFound();
-        }
-
-        var updatedSongs = new List<SongReference>();
-        for (int i = 0; i < dto.SongIds.Count; i++)
-        {
-            var existingSong = playlist.Songs.FirstOrDefault(s => s.Id == dto.SongIds[i]);
-            if (existingSong != null)
-            {
-                existingSong.Position = i;
-                updatedSongs.Add(existingSong);
-            }
-        }
-
-        var updateDefinition = Builders<Playlist>.Update
-            .Set(p => p.Songs, updatedSongs)
-            .Set(p => p.UpdatedAt, DateTime.UtcNow);
-
-        await _context.Playlists.UpdateOneAsync(p => p.Id == id, updateDefinition);
-
-        return NoContent();
-    }
-
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeletePlaylist(string id)
     {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var result = await _context.Playlists.DeleteOneAsync(p => p.Id == id);
 
         if (result.DeletedCount == 0)
@@ -274,9 +251,4 @@ public class UpdatePlaylistDto
 {
     public string? Name { get; set; }
     public string? Description { get; set; }
-}
-
-public class ReorderSongsDto
-{
-    public List<string> SongIds { get; set; } = new();
 } 

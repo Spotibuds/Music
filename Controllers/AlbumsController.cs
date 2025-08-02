@@ -22,27 +22,78 @@ public class AlbumsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<AlbumDto>>> GetAlbums()
     {
-        var albums = await _context.Albums
-            .Find(_ => true)
-            .ToListAsync();
-
-        var albumDtos = albums.Select(a => new AlbumDto
+        Console.WriteLine($"GetAlbums called - IsConnected: {_context.IsConnected}, Albums collection: {_context.Albums != null}");
+        
+        if (!_context.IsConnected || _context.Albums == null)
         {
-            Id = a.Id,
-            Title = a.Title,
-            Songs = a.Songs,
-            Artist = a.Artist,
-            CoverUrl = a.CoverUrl,
-            ReleaseDate = a.ReleaseDate,
-            CreatedAt = a.CreatedAt
-        }).ToList();
+            Console.WriteLine("GetAlbums: MongoDB not connected or Albums collection is null");
+            return StatusCode(503, "Service unavailable - database connection failed");
+        }
 
-        return Ok(albumDtos);
+        try
+        {
+            // Test connection before proceeding
+            var isConnected = await _context.TestConnectionAsync();
+            if (!isConnected)
+            {
+                Console.WriteLine("GetAlbums: Connection test failed");
+                return StatusCode(503, "Database connection failed. Please try again later.");
+            }
+
+            Console.WriteLine("GetAlbums: Starting database query...");
+            
+            var albums = await _context.ExecuteWithRetryAsync(async () =>
+            {
+                return await _context.Albums!.Find(_ => true).ToListAsync();
+            });
+
+            if (albums == null)
+            {
+                Console.WriteLine("GetAlbums: Database operation failed after retries");
+                return StatusCode(503, "Database operation failed. Please try again later.");
+            }
+
+            Console.WriteLine($"GetAlbums: Found {albums.Count} albums in database");
+
+            var albumDtos = albums.Select(a => new AlbumDto
+            {
+                Id = a.Id,
+                Title = a.Title,
+                Artist = a.Artist,
+                CoverUrl = a.CoverUrl,
+                ReleaseDate = a.ReleaseDate,
+                CreatedAt = a.CreatedAt
+            }).ToList();
+
+            Console.WriteLine("GetAlbums: Successfully returning album data");
+            return Ok(albumDtos);
+        }
+        catch (MongoDB.Driver.MongoConnectionException ex)
+        {
+            Console.WriteLine($"GetAlbums: MongoDB connection error: {ex.Message}");
+            return StatusCode(503, "Database connection failed. Please try again later.");
+        }
+        catch (MongoDB.Driver.MongoException ex) when (ex.Message.Contains("timeout") || ex.Message.Contains("Timeout"))
+        {
+            Console.WriteLine($"GetAlbums: MongoDB timeout error: {ex.Message}");
+            return StatusCode(503, "Database operation timed out. Please try again later.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"GetAlbums: General error: {ex.Message}");
+            return StatusCode(500, "Internal server error");
+        }
     }
 
     [HttpGet("{id}")]
     public async Task<ActionResult<AlbumDto>> GetAlbum(string id)
     {
+        if (!_context.IsConnected || _context.Albums == null)
+        {
+            Console.WriteLine("GetAlbum: MongoDB not connected or Albums collection is null");
+            return StatusCode(503, "Service unavailable - database connection failed");
+        }
+
         var album = await _context.Albums
             .Find(a => a.Id == id)
             .FirstOrDefaultAsync();
@@ -95,6 +146,11 @@ public class AlbumsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<AlbumDto>> CreateAlbum(CreateAlbumDto dto)
     {
+        if (!_context.IsConnected || _context.Albums == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var album = new Album
         {
             Title = dto.Title,
@@ -121,9 +177,9 @@ public class AlbumsController : ControllerBase
     [HttpPost("{id}/upload-cover")]
     public async Task<IActionResult> UploadAlbumCover(string id, IFormFile imageFile)
     {
-        if (imageFile == null || imageFile.Length == 0)
+        if (!_context.IsConnected || _context.Albums == null)
         {
-            return BadRequest("No image file provided");
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
 
         var album = await _context.Albums
@@ -132,7 +188,12 @@ public class AlbumsController : ControllerBase
 
         if (album == null)
         {
-            return NotFound();
+            return NotFound("Album not found");
+        }
+
+        if (imageFile == null || imageFile.Length == 0)
+        {
+            return BadRequest("No file provided");
         }
 
         try
@@ -154,6 +215,11 @@ public class AlbumsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateAlbum(string id, UpdateAlbumDto dto)
     {
+        if (!_context.IsConnected || _context.Albums == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var updateDefinition = Builders<Album>.Update.Set("placeholder", "placeholder");
 
         if (!string.IsNullOrEmpty(dto.Title))
@@ -183,6 +249,11 @@ public class AlbumsController : ControllerBase
     [HttpPost("{albumId}/songs/{songId}")]
     public async Task<IActionResult> AddSongToAlbum(string albumId, string songId, [FromQuery] int position = -1)
     {
+        if (!_context.IsConnected || _context.Albums == null || _context.Songs == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var album = await _context.Albums
             .Find(a => a.Id == albumId)
             .FirstOrDefaultAsync();
@@ -237,6 +308,11 @@ public class AlbumsController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteAlbum(string id)
     {
+        if (!_context.IsConnected || _context.Albums == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var result = await _context.Albums.DeleteOneAsync(a => a.Id == id);
 
         if (result.DeletedCount == 0)

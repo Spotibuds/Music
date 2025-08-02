@@ -22,31 +22,106 @@ public class SongsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<SongDto>>> GetSongs()
     {
-        var songs = await _context.Songs
-            .Find(_ => true)
-            .ToListAsync();
-
-        var songDtos = songs.Select(s => new SongDto
+        Console.WriteLine($"GetSongs called - IsConnected: {_context.IsConnected}, Songs collection: {_context.Songs != null}");
+        
+        if (!_context.IsConnected || _context.Songs == null)
         {
-            Id = s.Id,
-            Title = s.Title,
-            Artists = s.Artists,
-            Genre = s.Genre,
-            DurationSec = s.DurationSec,
-            Album = s.Album,
-            FileUrl = s.FileUrl,
-            SnippetUrl = s.SnippetUrl,
-            CoverUrl = s.CoverUrl,
-            CreatedAt = s.CreatedAt,
-            ReleaseDate = s.ReleaseDate
-        }).ToList();
+            Console.WriteLine("GetSongs: MongoDB not connected or Songs collection is null");
+            return StatusCode(503, new { 
+                error = "Service unavailable - database connection failed",
+                details = "MongoDB is not accessible. Please check the connection string and server status.",
+                timestamp = DateTime.UtcNow
+            });
+        }
 
-        return Ok(songDtos);
+        try
+        {
+            // Test connection before proceeding
+            var isConnected = await _context.TestConnectionAsync();
+            if (!isConnected)
+            {
+                Console.WriteLine("GetSongs: Connection test failed");
+                return StatusCode(503, new { 
+                    error = "Database connection failed. Please try again later.",
+                    details = "MongoDB server is not responding to ping requests.",
+                    timestamp = DateTime.UtcNow
+                });
+            }
+
+            Console.WriteLine("GetSongs: Starting database query...");
+            
+            var songs = await _context.ExecuteWithRetryAsync(async () =>
+            {
+                return await _context.Songs!.Find(_ => true).ToListAsync();
+            });
+
+            if (songs == null)
+            {
+                Console.WriteLine("GetSongs: Database operation failed after retries");
+                return StatusCode(503, new { 
+                    error = "Database operation failed. Please try again later.",
+                    details = "All retry attempts failed to retrieve data from MongoDB.",
+                    timestamp = DateTime.UtcNow
+                });
+            }
+
+            Console.WriteLine($"GetSongs: Found {songs.Count} songs in database");
+
+            var songDtos = songs.Select(s => new SongDto
+            {
+                Id = s.Id,
+                Title = s.Title,
+                Artists = s.Artists,
+                Genre = s.Genre,
+                DurationSec = s.DurationSec,
+                Album = s.Album,
+                FileUrl = s.FileUrl,
+                SnippetUrl = s.SnippetUrl,
+                CoverUrl = s.CoverUrl,
+                CreatedAt = s.CreatedAt,
+                ReleaseDate = s.ReleaseDate
+            }).ToList();
+
+            Console.WriteLine("GetSongs: Successfully returning song data");
+            return Ok(songDtos);
+        }
+        catch (MongoDB.Driver.MongoConnectionException ex)
+        {
+            Console.WriteLine($"GetSongs: MongoDB connection error: {ex.Message}");
+            return StatusCode(503, new { 
+                error = "Database connection failed. Please try again later.",
+                details = ex.Message,
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (MongoDB.Driver.MongoException ex) when (ex.Message.Contains("timeout") || ex.Message.Contains("Timeout"))
+        {
+            Console.WriteLine($"GetSongs: MongoDB timeout error: {ex.Message}");
+            return StatusCode(503, new { 
+                error = "Database operation timed out. Please try again later.",
+                details = ex.Message,
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"GetSongs: General error: {ex.Message}");
+            return StatusCode(500, new { 
+                error = "Internal server error",
+                details = ex.Message,
+                timestamp = DateTime.UtcNow
+            });
+        }
     }
 
     [HttpGet("{id}")]
     public async Task<ActionResult<SongDto>> GetSong(string id)
     {
+        if (!_context.IsConnected || _context.Songs == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var song = await _context.Songs
             .Find(s => s.Id == id)
             .FirstOrDefaultAsync();
@@ -77,6 +152,11 @@ public class SongsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<SongDto>> CreateSong(CreateSongDto dto)
     {
+        if (!_context.IsConnected || _context.Songs == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var song = new Song
         {
             Title = dto.Title,
@@ -113,9 +193,9 @@ public class SongsController : ControllerBase
     [HttpPost("{id}/upload-file")]
     public async Task<IActionResult> UploadSongFile(string id, IFormFile audioFile)
     {
-        if (audioFile == null || audioFile.Length == 0)
+        if (!_context.IsConnected || _context.Songs == null)
         {
-            return BadRequest("No audio file provided");
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
 
         var song = await _context.Songs
@@ -124,7 +204,12 @@ public class SongsController : ControllerBase
 
         if (song == null)
         {
-            return NotFound();
+            return NotFound("Song not found");
+        }
+
+        if (audioFile == null || audioFile.Length == 0)
+        {
+            return BadRequest("No file provided");
         }
 
         try
@@ -146,9 +231,9 @@ public class SongsController : ControllerBase
     [HttpPost("{id}/upload-cover")]
     public async Task<IActionResult> UploadSongCover(string id, IFormFile imageFile)
     {
-        if (imageFile == null || imageFile.Length == 0)
+        if (!_context.IsConnected || _context.Songs == null)
         {
-            return BadRequest("No image file provided");
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
 
         var song = await _context.Songs
@@ -157,7 +242,12 @@ public class SongsController : ControllerBase
 
         if (song == null)
         {
-            return NotFound();
+            return NotFound("Song not found");
+        }
+
+        if (imageFile == null || imageFile.Length == 0)
+        {
+            return BadRequest("No file provided");
         }
 
         try
@@ -179,9 +269,9 @@ public class SongsController : ControllerBase
     [HttpPost("{id}/upload-snippet")]
     public async Task<IActionResult> UploadSongSnippet(string id, IFormFile audioFile)
     {
-        if (audioFile == null || audioFile.Length == 0)
+        if (!_context.IsConnected || _context.Songs == null)
         {
-            return BadRequest("No audio file provided");
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
 
         var song = await _context.Songs
@@ -190,7 +280,12 @@ public class SongsController : ControllerBase
 
         if (song == null)
         {
-            return NotFound();
+            return NotFound("Song not found");
+        }
+
+        if (audioFile == null || audioFile.Length == 0)
+        {
+            return BadRequest("No file provided");
         }
 
         try
@@ -212,6 +307,11 @@ public class SongsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateSong(string id, UpdateSongDto dto)
     {
+        if (!_context.IsConnected || _context.Songs == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var updateDefinition = Builders<Song>.Update.Set("placeholder", "placeholder");
 
         if (!string.IsNullOrEmpty(dto.Title))
@@ -256,6 +356,11 @@ public class SongsController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteSong(string id)
     {
+        if (!_context.IsConnected || _context.Songs == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
         var result = await _context.Songs.DeleteOneAsync(s => s.Id == id);
 
         if (result.DeletedCount == 0)
