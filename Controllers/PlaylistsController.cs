@@ -19,7 +19,7 @@ public class PlaylistsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<PlaylistDto>>> GetPlaylists()
     {
-        if (!_context.IsConnected || _context.Playlists == null)
+        if (!_context.IsConnected || _context.Playlists == null || _context.Songs == null)
         {
             return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
@@ -28,15 +28,49 @@ public class PlaylistsController : ControllerBase
             .Find(_ => true)
             .ToListAsync();
 
-        var playlistDtos = playlists.Select(p => new PlaylistDto
+        var playlistDtos = new List<PlaylistDto>();
+        foreach (var playlist in playlists)
         {
-            Id = p.Id,
-            Name = p.Name,
-            Description = p.Description,
-            Songs = p.Songs,
-            CreatedAt = p.CreatedAt,
-            UpdatedAt = p.UpdatedAt
-        }).ToList();
+            // Populate song details
+            var playlistSongs = new List<PlaylistSongDto>();
+            foreach (var songRef in playlist.Songs.OrderBy(s => s.Position))
+            {
+                var song = await _context.Songs
+                    .Find(s => s.Id == songRef.Id)
+                    .FirstOrDefaultAsync();
+
+                if (song != null)
+                {
+                    playlistSongs.Add(new PlaylistSongDto
+                    {
+                        Id = song.Id,
+                        Title = song.Title,
+                        Artists = song.Artists,
+                        Genre = song.Genre,
+                        DurationSec = song.DurationSec,
+                        Album = song.Album,
+                        FileUrl = song.FileUrl,
+                        SnippetUrl = song.SnippetUrl,
+                        CoverUrl = song.CoverUrl,
+                        CreatedAt = song.CreatedAt,
+                        ReleaseDate = song.ReleaseDate,
+                        Position = songRef.Position,
+                        AddedAt = songRef.AddedAt
+                    });
+                }
+            }
+
+            playlistDtos.Add(new PlaylistDto
+            {
+                Id = playlist.Id,
+                Name = playlist.Name,
+                Description = playlist.Description,
+                CreatedBy = playlist.CreatedBy,
+                Songs = playlistSongs,
+                CreatedAt = playlist.CreatedAt,
+                UpdatedAt = playlist.UpdatedAt
+            });
+        }
 
         return Ok(playlistDtos);
     }
@@ -44,7 +78,7 @@ public class PlaylistsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<ActionResult<PlaylistDto>> GetPlaylist(string id)
     {
-        if (!_context.IsConnected || _context.Playlists == null)
+        if (!_context.IsConnected || _context.Playlists == null || _context.Songs == null)
         {
             return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
@@ -58,12 +92,42 @@ public class PlaylistsController : ControllerBase
             return NotFound();
         }
 
+        // Populate song details
+        var playlistSongs = new List<PlaylistSongDto>();
+        foreach (var songRef in playlist.Songs.OrderBy(s => s.Position))
+        {
+            var song = await _context.Songs
+                .Find(s => s.Id == songRef.Id)
+                .FirstOrDefaultAsync();
+
+            if (song != null)
+            {
+                playlistSongs.Add(new PlaylistSongDto
+                {
+                    Id = song.Id,
+                    Title = song.Title,
+                    Artists = song.Artists,
+                    Genre = song.Genre,
+                    DurationSec = song.DurationSec,
+                    Album = song.Album,
+                    FileUrl = song.FileUrl,
+                    SnippetUrl = song.SnippetUrl,
+                    CoverUrl = song.CoverUrl,
+                    CreatedAt = song.CreatedAt,
+                    ReleaseDate = song.ReleaseDate,
+                    Position = songRef.Position,
+                    AddedAt = songRef.AddedAt
+                });
+            }
+        }
+
         var playlistDto = new PlaylistDto
         {
             Id = playlist.Id,
             Name = playlist.Name,
             Description = playlist.Description,
-            Songs = playlist.Songs,
+            CreatedBy = playlist.CreatedBy,
+            Songs = playlistSongs,
             CreatedAt = playlist.CreatedAt,
             UpdatedAt = playlist.UpdatedAt
         };
@@ -92,7 +156,8 @@ public class PlaylistsController : ControllerBase
             Id = playlist.Id,
             Name = playlist.Name,
             Description = playlist.Description,
-            Songs = playlist.Songs,
+            CreatedBy = playlist.CreatedBy,
+            Songs = new List<PlaylistSongDto>(), // Empty list for new playlist
             CreatedAt = playlist.CreatedAt,
             UpdatedAt = playlist.UpdatedAt
         };
@@ -229,6 +294,97 @@ public class PlaylistsController : ControllerBase
 
         return NoContent();
     }
+
+    // User-specific playlist endpoints
+    [HttpGet("user/{userId}")]
+    public async Task<ActionResult<IEnumerable<PlaylistDto>>> GetUserPlaylists(string userId)
+    {
+        if (!_context.IsConnected || _context.Playlists == null || _context.Songs == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
+        var playlists = await _context.Playlists
+            .Find(p => p.CreatedBy == userId)
+            .ToListAsync();
+
+        var playlistDtos = new List<PlaylistDto>();
+        foreach (var playlist in playlists)
+        {
+            // Populate song details
+            var playlistSongs = new List<PlaylistSongDto>();
+            foreach (var songRef in playlist.Songs.OrderBy(s => s.Position))
+            {
+                var song = await _context.Songs
+                    .Find(s => s.Id == songRef.Id)
+                    .FirstOrDefaultAsync();
+
+                if (song != null)
+                {
+                    playlistSongs.Add(new PlaylistSongDto
+                    {
+                        Id = song.Id,
+                        Title = song.Title,
+                        Artists = song.Artists,
+                        Genre = song.Genre,
+                        DurationSec = song.DurationSec,
+                        Album = song.Album,
+                        FileUrl = song.FileUrl,
+                        SnippetUrl = song.SnippetUrl,
+                        CoverUrl = song.CoverUrl,
+                        CreatedAt = song.CreatedAt,
+                        ReleaseDate = song.ReleaseDate,
+                        Position = songRef.Position,
+                        AddedAt = songRef.AddedAt
+                    });
+                }
+            }
+
+            playlistDtos.Add(new PlaylistDto
+            {
+                Id = playlist.Id,
+                Name = playlist.Name,
+                Description = playlist.Description,
+                Songs = playlistSongs,
+                CreatedBy = playlist.CreatedBy,
+                CreatedAt = playlist.CreatedAt,
+                UpdatedAt = playlist.UpdatedAt
+            });
+        }
+
+        return Ok(playlistDtos);
+    }
+
+    [HttpPost("user/{userId}")]
+    public async Task<ActionResult<PlaylistDto>> CreateUserPlaylist(string userId, CreateUserPlaylistDto dto)
+    {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
+        var playlist = new Playlist
+        {
+            Name = dto.Name,
+            Description = dto.Description,
+            CreatedBy = userId
+        };
+
+        await _context.Playlists.InsertOneAsync(playlist);
+
+        var playlistDto = new PlaylistDto
+        {
+            Id = playlist.Id,
+            Name = playlist.Name,
+            Description = playlist.Description,
+            Songs = new List<PlaylistSongDto>(), // Empty list for new playlist
+            CreatedBy = playlist.CreatedBy,
+            CreatedAt = playlist.CreatedAt,
+            UpdatedAt = playlist.UpdatedAt
+        };
+
+        return CreatedAtAction(nameof(GetPlaylist), new { id = playlist.Id }, playlistDto);
+    }
 }
 
 public class PlaylistDto
@@ -236,12 +392,36 @@ public class PlaylistDto
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
-    public List<SongReference> Songs { get; set; } = new();
+    public string? CreatedBy { get; set; }
+    public List<PlaylistSongDto> Songs { get; set; } = new();
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
 
+public class PlaylistSongDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public List<ArtistReference> Artists { get; set; } = new();
+    public string? Genre { get; set; }
+    public int DurationSec { get; set; }
+    public AlbumReference? Album { get; set; }
+    public string? FileUrl { get; set; }
+    public string? SnippetUrl { get; set; }
+    public string? CoverUrl { get; set; }
+    public DateTime? CreatedAt { get; set; }
+    public DateTime? ReleaseDate { get; set; }
+    public int Position { get; set; }
+    public DateTime AddedAt { get; set; }
+}
+
 public class CreatePlaylistDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+}
+
+public class CreateUserPlaylistDto
 {
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }

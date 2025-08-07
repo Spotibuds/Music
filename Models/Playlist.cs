@@ -15,6 +15,9 @@ public class Playlist
     [BsonElement("description")]
     public string? Description { get; set; }
 
+    [BsonElement("createdBy")]
+    public string? CreatedBy { get; set; }
+
     [BsonElement("songs")]
     public List<SongReference> Songs { get; set; } = new List<SongReference>();
 
