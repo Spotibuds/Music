@@ -20,7 +20,9 @@ public class SongsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<SongDto>>> GetSongs()
+    public async Task<ActionResult<IEnumerable<SongDto>>> GetSongs(
+        [FromQuery] int? limit = null, 
+        [FromQuery] int skip = 0)
     {
         Console.WriteLine($"GetSongs called - IsConnected: {_context.IsConnected}, Songs collection: {_context.Songs != null}");
         
@@ -52,7 +54,13 @@ public class SongsController : ControllerBase
             
             var songs = await _context.ExecuteWithRetryAsync(async () =>
             {
-                return await _context.Songs!.Find(_ => true).ToListAsync();
+                var query = _context.Songs!.Find(_ => true).Skip(skip);
+                
+                // If no limit specified or limit > 100, default to 50 for performance
+                int effectiveLimit = limit ?? 50;
+                if (effectiveLimit > 100) effectiveLimit = 100;
+                
+                return await query.Limit(effectiveLimit).ToListAsync();
             });
 
             if (songs == null)

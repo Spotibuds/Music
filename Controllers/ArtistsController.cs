@@ -20,7 +20,9 @@ public class ArtistsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<ArtistDto>>> GetArtists()
+    public async Task<ActionResult<IEnumerable<ArtistDto>>> GetArtists(
+        [FromQuery] int? limit = null, 
+        [FromQuery] int skip = 0)
     {
         Console.WriteLine($"GetArtists called - IsConnected: {_context.IsConnected}, Artists collection: {_context.Artists != null}");
         
@@ -44,7 +46,13 @@ public class ArtistsController : ControllerBase
             
             var artists = await _context.ExecuteWithRetryAsync(async () =>
             {
-                return await _context.Artists!.Find(_ => true).ToListAsync();
+                var query = _context.Artists!.Find(_ => true).Skip(skip);
+                
+                // If no limit specified or limit > 100, default to 20 for performance
+                int effectiveLimit = limit ?? 20;
+                if (effectiveLimit > 100) effectiveLimit = 100;
+                
+                return await query.Limit(effectiveLimit).ToListAsync();
             });
 
             if (artists == null)
@@ -207,6 +215,120 @@ public class ArtistsController : ControllerBase
         catch (Exception ex)
         {
             return StatusCode(500, $"Error uploading image: {ex.Message}");
+        }
+    }
+
+    [HttpGet("{id}/albums")]
+    public async Task<ActionResult<object>> GetArtistAlbums(string id,
+        [FromQuery] int? limit = null,
+        [FromQuery] int skip = 0)
+    {
+        if (!_context.IsConnected || _context.Albums == null)
+        {
+            return StatusCode(503, "Service unavailable - database connection failed");
+        }
+
+        try
+        {
+            // First, get the artist to verify it exists and get the artist name
+            var artist = await _context.Artists!.Find(a => a.Id == id).FirstOrDefaultAsync();
+            if (artist == null)
+            {
+                return NotFound("Artist not found");
+            }
+
+            var albums = await _context.ExecuteWithRetryAsync(async () =>
+            {
+                var query = _context.Albums!.Find(album => album.Artist.Name == artist.Name).Skip(skip);
+                
+                int effectiveLimit = limit ?? 20;
+                if (effectiveLimit > 100) effectiveLimit = 100;
+                
+                return await query.Limit(effectiveLimit).ToListAsync();
+            });
+
+            if (albums == null)
+            {
+                return StatusCode(503, "Database operation failed. Please try again later.");
+            }
+
+            var result = albums.Select(a => new
+            {
+                Id = a.Id,
+                Title = a.Title,
+                Artist = a.Artist,
+                CoverUrl = a.CoverUrl,
+                ReleaseDate = a.ReleaseDate,
+                CreatedAt = a.CreatedAt
+            }).ToList();
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"GetArtistAlbums error: {ex.Message}");
+            return StatusCode(500, "Internal server error");
+        }
+    }
+
+    [HttpGet("{id}/songs")]
+    public async Task<ActionResult<object>> GetArtistSongs(string id,
+        [FromQuery] int? limit = null,
+        [FromQuery] int skip = 0)
+    {
+        if (!_context.IsConnected || _context.Songs == null)
+        {
+            return StatusCode(503, "Service unavailable - database connection failed");
+        }
+
+        try
+        {
+            // First, get the artist to verify it exists and get the artist name
+            var artist = await _context.Artists!.Find(a => a.Id == id).FirstOrDefaultAsync();
+            if (artist == null)
+            {
+                return NotFound("Artist not found");
+            }
+
+            var songs = await _context.ExecuteWithRetryAsync(async () =>
+            {
+                var query = _context.Songs!.Find(song => 
+                    song.Artists.Any(a => a.Id == artist.Id) || 
+                    song.Artists.Any(a => a.Name == artist.Name)
+                ).Skip(skip);
+                
+                int effectiveLimit = limit ?? 50;
+                if (effectiveLimit > 100) effectiveLimit = 100;
+                
+                return await query.Limit(effectiveLimit).ToListAsync();
+            });
+
+            if (songs == null)
+            {
+                return StatusCode(503, "Database operation failed. Please try again later.");
+            }
+
+            var result = songs.Select(s => new
+            {
+                Id = s.Id,
+                Title = s.Title,
+                Artists = s.Artists,
+                Genre = s.Genre,
+                DurationSec = s.DurationSec,
+                Album = s.Album,
+                FileUrl = s.FileUrl,
+                SnippetUrl = s.SnippetUrl,
+                CoverUrl = s.CoverUrl,
+                CreatedAt = s.CreatedAt,
+                ReleaseDate = s.ReleaseDate
+            }).ToList();
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"GetArtistSongs error: {ex.Message}");
+            return StatusCode(500, "Internal server error");
         }
     }
 

@@ -20,7 +20,9 @@ public class AlbumsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<AlbumDto>>> GetAlbums()
+    public async Task<ActionResult<IEnumerable<AlbumDto>>> GetAlbums(
+        [FromQuery] int? limit = null, 
+        [FromQuery] int skip = 0)
     {
         Console.WriteLine($"GetAlbums called - IsConnected: {_context.IsConnected}, Albums collection: {_context.Albums != null}");
         
@@ -44,7 +46,13 @@ public class AlbumsController : ControllerBase
             
             var albums = await _context.ExecuteWithRetryAsync(async () =>
             {
-                return await _context.Albums!.Find(_ => true).ToListAsync();
+                var query = _context.Albums!.Find(_ => true).Skip(skip);
+                
+                // If no limit specified or limit > 100, default to 20 for performance
+                int effectiveLimit = limit ?? 20;
+                if (effectiveLimit > 100) effectiveLimit = 100;
+                
+                return await query.Limit(effectiveLimit).ToListAsync();
             });
 
             if (albums == null)
