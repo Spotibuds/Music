@@ -28,7 +28,6 @@ public class MediaController : ControllerBase
     [HttpGet("image")]
     public async Task<IActionResult> GetImage([FromQuery] string url)
     {
-        
         try
         {
             if (string.IsNullOrEmpty(url))
@@ -36,87 +35,80 @@ public class MediaController : ControllerBase
                 return BadRequest("URL parameter is required");
             }
 
-            // Create cache key from URL
             var cacheKey = $"image_{url.GetHashCode()}";
-            
-            
-            // 1. Check Redis cache first
+
+            // Memory cache first
+            if (_memoryCache.TryGetValue(cacheKey, out byte[]? cachedImage) && cachedImage != null)
+            {
+                Response.Headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800";
+                Response.Headers["Access-Control-Allow-Origin"] = "*";
+                Response.Headers["ETag"] = $"\"{url.GetHashCode()}\"";
+                Response.Headers["Access-Control-Expose-Headers"] = "Accept-Ranges, Content-Range, Content-Length, ETag, Last-Modified";
+                return File(cachedImage, GetContentType(url), enableRangeProcessing: false);
+            }
+
+            // Redis cache next
             try
             {
                 var redisImage = await _redisDatabase.StringGetAsync(cacheKey);
                 if (redisImage.HasValue)
                 {
-                    
-                    var redisImageBytes = (byte[])redisImage!;
-                    
+                    var bytes = (byte[])redisImage;
                     var memoryCacheOptions = new MemoryCacheEntryOptions
                     {
                         SlidingExpiration = TimeSpan.FromMinutes(30),
-                        Size = redisImageBytes.Length,
+                        Size = bytes.Length,
                         Priority = CacheItemPriority.High
                     };
-                    _memoryCache.Set(cacheKey, redisImageBytes, memoryCacheOptions);
-                    
-                    return File(redisImageBytes, GetContentType(url), enableRangeProcessing: false);
+                    _memoryCache.Set(cacheKey, bytes, memoryCacheOptions);
+
+                    Response.Headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800";
+                    Response.Headers["Access-Control-Allow-Origin"] = "*";
+                    Response.Headers["ETag"] = $"\"{url.GetHashCode()}\"";
+                    Response.Headers["Access-Control-Expose-Headers"] = "Accept-Ranges, Content-Range, Content-Length, ETag, Last-Modified";
+                    return File(bytes, GetContentType(url), enableRangeProcessing: false);
                 }
             }
-            catch (Exception redisEx)
-{
-}
-            
-            if (_memoryCache.TryGetValue(cacheKey, out byte[]? cachedImage) && cachedImage != null)
+            catch
             {
-                return File(cachedImage, GetContentType(url), enableRangeProcessing: false);
+                // ignore redis errors
             }
 
+            // Parse Azure Blob URL
             var uri = new Uri(url);
             var pathSegments = uri.AbsolutePath.TrimStart('/').Split('/');
-            
             if (pathSegments.Length < 2)
             {
                 return BadRequest("Invalid Azure Blob URL format");
             }
-
             var containerName = pathSegments[0];
             var blobName = string.Join("/", pathSegments.Skip(1));
 
-            var imageStream = await _blobService.DownloadFileAsync(containerName, blobName);
-            
-            using var memoryStream = new MemoryStream();
-            await imageStream.CopyToAsync(memoryStream);
-            var imageBytes = memoryStream.ToArray();
+            // Download from Blob
+            await using var imageStream = await _blobService.DownloadFileAsync(containerName, blobName);
+            using var ms = new MemoryStream();
+            await imageStream.CopyToAsync(ms);
+            var imageBytes = ms.ToArray();
 
+            // Cache
             _ = Task.Run(async () =>
             {
-                try
-                {
-                    await _redisDatabase.StringSetAsync(cacheKey, imageBytes, TimeSpan.FromHours(6));
-                }
-                catch (Exception ex)
-{
-                }
-                
-                var cacheOptions = new MemoryCacheEntryOptions
-                {
-                    SlidingExpiration = TimeSpan.FromHours(1),
-                    Size = imageBytes.Length,
-                    Priority = CacheItemPriority.Normal
-                };
-                _memoryCache.Set(cacheKey, imageBytes, cacheOptions);
+                try { await _redisDatabase.StringSetAsync(cacheKey, imageBytes, TimeSpan.FromHours(6)); } catch { }
+                var options = new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromHours(1), Size = imageBytes.Length, Priority = CacheItemPriority.Normal };
+                _memoryCache.Set(cacheKey, imageBytes, options);
             });
 
             var contentType = GetContentType(blobName);
-            
             Response.Headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800";
             Response.Headers["Access-Control-Allow-Origin"] = "*";
             Response.Headers["ETag"] = $"\"{url.GetHashCode()}\"";
-            
+            Response.Headers["Access-Control-Expose-Headers"] = "Accept-Ranges, Content-Range, Content-Length, ETag, Last-Modified";
             return File(imageBytes, contentType, enableRangeProcessing: false);
         }
-        catch (Exception ex)
-{
-    return NotFound("Image not found");
-}
+        catch
+        {
+            return NotFound("Image not found");
+        }
     }
 
     private static string GetContentType(string fileName)
