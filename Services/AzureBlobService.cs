@@ -1,5 +1,6 @@
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage.Sas;
 
 namespace Music.Services;
 
@@ -14,6 +15,7 @@ public interface IAzureBlobService
     Task<bool> DeleteFileAsync(string containerName, string blobName);
     Task<List<string>> ListFilesAsync(string containerName, string prefix = "");
     BlobContainerClient GetBlobContainerClient(string containerName);
+    string GenerateSasUrl(string containerName, string blobName, TimeSpan? expiry = null);
 }
 
 public class AzureBlobService : IAzureBlobService
@@ -40,7 +42,7 @@ public class AzureBlobService : IAzureBlobService
     public async Task<string> UploadSongAsync(string songId, Stream fileStream, string fileName)
     {
         var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
 
         var fileGuid = Guid.NewGuid().ToString();
         var fileExtension = Path.GetExtension(fileName).ToLower();
@@ -49,13 +51,13 @@ public class AzureBlobService : IAzureBlobService
         var blobClient = containerClient.GetBlobClient(blobName);
         await blobClient.UploadAsync(fileStream, overwrite: true);
 
-        return blobClient.Uri.ToString();
+        return GenerateSasUrl(_songsContainer, blobName, TimeSpan.FromDays(365)); // Long-lived URL for songs
     }
 
     public async Task<string> UploadSongCoverAsync(string songId, Stream imageStream, string fileName)
     {
         var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
 
         var imageGuid = Guid.NewGuid().ToString();
         var blobName = $"{songId}/cover/{imageGuid}.jpg";
@@ -63,13 +65,13 @@ public class AzureBlobService : IAzureBlobService
         var blobClient = containerClient.GetBlobClient(blobName);
         await blobClient.UploadAsync(imageStream, overwrite: true);
 
-        return blobClient.Uri.ToString();
+        return GenerateSasUrl(_songsContainer, blobName, TimeSpan.FromDays(365));
     }
 
     public async Task<string> UploadSongSnippetAsync(string songId, Stream audioStream, string fileName)
     {
         var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
 
         var snippetGuid = Guid.NewGuid().ToString();
         var blobName = $"{songId}/snippet/{snippetGuid}.mp3";
@@ -77,13 +79,13 @@ public class AzureBlobService : IAzureBlobService
         var blobClient = containerClient.GetBlobClient(blobName);
         await blobClient.UploadAsync(audioStream, overwrite: true);
 
-        return blobClient.Uri.ToString();
+        return GenerateSasUrl(_songsContainer, blobName, TimeSpan.FromDays(365));
     }
 
     public async Task<string> UploadArtistImageAsync(string artistId, Stream imageStream, string fileName)
     {
         var containerClient = _blobServiceClient.GetBlobContainerClient(_artistsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
 
         var imageGuid = Guid.NewGuid().ToString();
         var blobName = $"{artistId}/profilePicture/{imageGuid}.jpg";
@@ -91,13 +93,13 @@ public class AzureBlobService : IAzureBlobService
         var blobClient = containerClient.GetBlobClient(blobName);
         await blobClient.UploadAsync(imageStream, overwrite: true);
 
-        return blobClient.Uri.ToString();
+        return GenerateSasUrl(_artistsContainer, blobName, TimeSpan.FromDays(365));
     }
 
     public async Task<string> UploadAlbumCoverAsync(string albumId, Stream imageStream, string fileName)
     {
         var containerClient = _blobServiceClient.GetBlobContainerClient(_albumsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
 
         var coverGuid = Guid.NewGuid().ToString();
         var blobName = $"{albumId}/cover/{coverGuid}.jpg";
@@ -105,7 +107,7 @@ public class AzureBlobService : IAzureBlobService
         var blobClient = containerClient.GetBlobClient(blobName);
         await blobClient.UploadAsync(imageStream, overwrite: true);
 
-        return blobClient.Uri.ToString();
+        return GenerateSasUrl(_albumsContainer, blobName, TimeSpan.FromDays(365));
     }
 
     public async Task<Stream> DownloadFileAsync(string containerName, string blobName)
@@ -142,5 +144,30 @@ public class AzureBlobService : IAzureBlobService
     public BlobContainerClient GetBlobContainerClient(string containerName)
     {
         return _blobServiceClient.GetBlobContainerClient(containerName);
+    }
+
+    public string GenerateSasUrl(string containerName, string blobName, TimeSpan? expiry = null)
+    {
+        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+        var blobClient = containerClient.GetBlobClient(blobName);
+
+        // Check if we can generate SAS (requires account key)
+        if (!blobClient.CanGenerateSasUri)
+        {
+            // Fallback to direct URL (won't work with private containers)
+            return blobClient.Uri.ToString();
+        }
+
+        var sasBuilder = new BlobSasBuilder
+        {
+            BlobContainerName = containerName,
+            BlobName = blobName,
+            Resource = "b", // blob resource
+            ExpiresOn = DateTimeOffset.UtcNow.Add(expiry ?? TimeSpan.FromHours(1)) // Default 1 hour expiry
+        };
+
+        sasBuilder.SetPermissions(BlobSasPermissions.Read);
+
+        return blobClient.GenerateSasUri(sasBuilder).ToString();
     }
 }
