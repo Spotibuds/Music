@@ -271,13 +271,13 @@ public class AdminController : ControllerBase
             // Add song to album if specified
             if (album != null)
             {
-                var songReference = new SongReference 
-                { 
-                    Id = song.Id, 
+                var songReference = new SongReference
+                {
+                    Id = song.Id,
                     Position = album.Songs.Count,
                     AddedAt = DateTime.UtcNow
                 };
-                
+
                 var albumFilter = Builders<Album>.Filter.Eq(a => a.Id, album.Id);
                 var albumUpdate = Builders<Album>.Update.Push(a => a.Songs, songReference);
                 await _context.Albums.UpdateOneAsync(albumFilter, albumUpdate);
@@ -331,6 +331,7 @@ public class AdminController : ControllerBase
             return StatusCode(500, "Internal server error");
         }
     }
+
 
     [HttpGet("songs/{id}")]
     public async Task<ActionResult<Song>> GetSong(string id)
@@ -662,13 +663,13 @@ public class AdminController : ControllerBase
                     // Add song to album if specified
                     if (album != null)
                     {
-                        var songReference = new SongReference 
-                        { 
-                            Id = song.Id, 
+                        var songReference = new SongReference
+                        {
+                            Id = song.Id,
                             Position = album.Songs.Count + createdSongs.Count - 1,
                             AddedAt = DateTime.UtcNow
                         };
-                        
+
                         var albumFilter = Builders<Album>.Filter.Eq(a => a.Id, album.Id);
                         var albumUpdate = Builders<Album>.Update.Push(a => a.Songs, songReference);
                         await _context.Albums.UpdateOneAsync(albumFilter, albumUpdate);
@@ -929,6 +930,96 @@ public class AdminController : ControllerBase
             return StatusCode(500, "Internal server error");
         }
     }
+    
+    [HttpPut("albums/{id}")]
+    public async Task<ActionResult<Album>> UpdateAlbum(string id, [FromForm] CreateAlbumRequest request)
+    {
+        try
+        {
+            var album = await _context.Albums!
+                .Find(a => a.Id == id)
+                .FirstOrDefaultAsync();
+
+            if (album == null)
+            {
+                return NotFound("Album not found");
+            }
+
+            string? oldArtistId = album.Artist?.Id;
+
+            if (!string.IsNullOrWhiteSpace(request.ArtistId) && request.ArtistId != oldArtistId)
+            {
+                var newArtist = await _context.Artists!
+                    .Find(a => a.Id == request.ArtistId)
+                    .FirstOrDefaultAsync();
+
+                if (newArtist == null)
+                {
+                    return BadRequest("New artist not found");
+                }
+
+                album.Artist = new ArtistReference { Id = newArtist.Id, Name = newArtist.Name };
+
+                if (!string.IsNullOrEmpty(oldArtistId))
+                {
+                    var oldArtistFilter = Builders<Artist>.Filter.Eq(a => a.Id, oldArtistId);
+                    var oldArtistUpdate = Builders<Artist>.Update.PullFilter(
+                        a => a.Albums,
+                        ar => ar.Id == album.Id
+                    );
+                    await _context.Artists!.UpdateOneAsync(oldArtistFilter, oldArtistUpdate);
+                }
+
+                var newArtistFilter = Builders<Artist>.Filter.Eq(a => a.Id, newArtist.Id);
+                var newArtistUpdate = Builders<Artist>.Update.Push(
+                    a => a.Albums,
+                    new AlbumReference { Id = album.Id, Title = album.Title }
+                );
+                await _context.Artists!.UpdateOneAsync(newArtistFilter, newArtistUpdate);
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.Title))
+            {
+                album.Title = request.Title;
+            }
+
+            if (request.ReleaseDate.HasValue)
+            {
+                album.ReleaseDate = request.ReleaseDate.Value;
+            }
+
+            if (request.CoverFile != null && request.CoverFile.Length > 0)
+            {
+                try
+                {
+                    var coverUrl = await _blobService.UploadAlbumCoverAsync(
+                        album.Id,
+                        request.CoverFile.OpenReadStream(),
+                        request.CoverFile.FileName
+                    );
+                    album.CoverUrl = coverUrl;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to upload album cover for {AlbumTitle}", album.Title);
+                    return StatusCode(500, "Failed to upload album cover");
+                }
+            }
+
+            var filter = Builders<Album>.Filter.Eq(a => a.Id, album.Id);
+            await _context.Albums!.ReplaceOneAsync(filter, album);
+
+            _logger.LogInformation("Updated album: {AlbumTitle} with ID: {AlbumId}", album.Title, album.Id);
+
+            return Ok(album);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating album {AlbumId}", id);
+            return StatusCode(500, "Internal server error");
+        }
+    }
+
 }
 
 // Request DTOs
@@ -953,6 +1044,7 @@ public class CreateAlbumRequest
     public DateTime? ReleaseDate { get; set; }
     public IFormFile? CoverFile { get; set; }
 }
+
 
 public class CreateSongRequest
 {
