@@ -893,6 +893,150 @@ public class AdminController : ControllerBase
         }
     }
 
+    [HttpPut("songs/{id}")]
+    public async Task<ActionResult<Song>> UpdateSong(string id, [FromForm] CreateSongRequest request)
+    {
+        try
+        {
+            var song = await _context.Songs!.Find(s => s.Id == id).FirstOrDefaultAsync();
+            if (song == null)
+            {
+                return NotFound("Song not found");
+            }
+
+            // Track old album for updates
+            string? oldAlbumId = song.Album?.Id;
+
+            // Update title
+            if (!string.IsNullOrWhiteSpace(request.Title))
+            {
+                song.Title = request.Title;
+            }
+
+            // Update genre
+            if (!string.IsNullOrWhiteSpace(request.Genre))
+            {
+                song.Genre = request.Genre;
+            }
+
+            if (request.Duration > 0)
+            {
+                song.DurationSec = request.Duration;
+            }
+
+            // Update artist if changed
+            if (!string.IsNullOrWhiteSpace(request.ArtistId))
+            {
+                var artist = await _context.Artists!.Find(a => a.Id == request.ArtistId).FirstOrDefaultAsync();
+                if (artist == null)
+                {
+                    return BadRequest("Artist not found");
+                }
+
+                song.Artists = new List<ArtistReference>
+            {
+                new ArtistReference { Id = artist.Id, Name = artist.Name }
+            };
+            }
+
+            // Update album if changed
+            if (!string.IsNullOrWhiteSpace(request.AlbumId) && request.AlbumId != oldAlbumId)
+            {
+                var album = await _context.Albums!.Find(a => a.Id == request.AlbumId).FirstOrDefaultAsync();
+                if (album == null)
+                {
+                    return BadRequest("Album not found");
+                }
+
+                song.Album = new AlbumReference { Id = album.Id, Title = album.Title };
+
+                // Remove from old album
+                if (!string.IsNullOrEmpty(oldAlbumId))
+                {
+                    var oldAlbumFilter = Builders<Album>.Filter.Eq(a => a.Id, oldAlbumId);
+                    var oldAlbumUpdate = Builders<Album>.Update.PullFilter(a => a.Songs, s => s.Id == song.Id);
+                    await _context.Albums!.UpdateOneAsync(oldAlbumFilter, oldAlbumUpdate);
+                }
+
+                // Add to new album
+                var songReference = new SongReference
+                {
+                    Id = song.Id,
+                    Position = album.Songs.Count,
+                    AddedAt = DateTime.UtcNow
+                };
+                var newAlbumFilter = Builders<Album>.Filter.Eq(a => a.Id, album.Id);
+                var newAlbumUpdate = Builders<Album>.Update.Push(a => a.Songs, songReference);
+                await _context.Albums!.UpdateOneAsync(newAlbumFilter, newAlbumUpdate);
+            }
+
+            if (request.AudioFile != null && request.AudioFile.Length > 0)
+            {
+                try
+                {
+                    var audioUrl = await _blobService.UploadSongAsync(
+                        song.Id,
+                        request.AudioFile.OpenReadStream(),
+                        request.AudioFile.FileName
+                    );
+                    song.FileUrl = audioUrl;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to upload new audio file for song {SongTitle}", song.Title);
+                    return StatusCode(500, "Failed to upload audio file");
+                }
+            }
+
+            if (request.CoverFile != null && request.CoverFile.Length > 0)
+            {
+                try
+                {
+                    var coverUrl = await _blobService.UploadSongCoverAsync(
+                        song.Id,
+                        request.CoverFile.OpenReadStream(),
+                        request.CoverFile.FileName
+                    );
+                    song.CoverUrl = coverUrl;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to upload new cover for song {SongTitle}", song.Title);
+                   
+                }
+            }
+
+            if (request.SnippetFile != null && request.SnippetFile.Length > 0)
+            {
+                try
+                {
+                    var snippetUrl = await _blobService.UploadSongSnippetAsync(
+                        song.Id,
+                        request.SnippetFile.OpenReadStream(),
+                        request.SnippetFile.FileName
+                    );
+                    song.SnippetUrl = snippetUrl;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to upload new snippet for song {SongTitle}", song.Title);
+                  
+                }
+            }
+
+            var filter = Builders<Song>.Filter.Eq(s => s.Id, song.Id);
+            await _context.Songs!.ReplaceOneAsync(filter, song);
+
+            _logger.LogInformation("Updated song: {SongTitle} with ID: {SongId}", song.Title, song.Id);
+            return Ok(song);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating song {SongId}", id);
+            return StatusCode(500, "Internal server error");
+        }
+    }
+
     [HttpDelete("albums/{id}")]
     public async Task<ActionResult> DeleteAlbum(string id)
     {
@@ -930,7 +1074,7 @@ public class AdminController : ControllerBase
             return StatusCode(500, "Internal server error");
         }
     }
-    
+
     [HttpPut("albums/{id}")]
     public async Task<ActionResult<Album>> UpdateAlbum(string id, [FromForm] CreateAlbumRequest request)
     {
