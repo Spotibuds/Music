@@ -11,6 +11,7 @@ public interface IAzureBlobService
     Task<string> UploadSongSnippetAsync(string songId, Stream audioStream, string fileName);
     Task<string> UploadArtistImageAsync(string artistId, Stream imageStream, string fileName);
     Task<string> UploadAlbumCoverAsync(string albumId, Stream imageStream, string fileName);
+    Task<string> UploadPlaylistCoverAsync(string playlistId, Stream imageStream, string fileName);
     Task<Stream> DownloadFileAsync(string containerName, string blobName);
     Task<bool> DeleteFileAsync(string containerName, string blobName);
     Task<bool> DeleteSongFilesAsync(string songId);
@@ -21,6 +22,7 @@ public interface IAzureBlobService
     Task<bool> DeleteSongSnippetFilesAsync(string songId);
     Task<bool> DeleteArtistImageFilesAsync(string artistId);
     Task<bool> DeleteAlbumCoverFilesAsync(string albumId);
+    Task<bool> DeletePlaylistCoverFilesAsync(string playlistId);
     Task<List<string>> ListFilesAsync(string containerName, string prefix = "");
     BlobContainerClient GetBlobContainerClient(string containerName);
     string GenerateSasUrl(string containerName, string blobName, TimeSpan? expiry = null);
@@ -29,23 +31,27 @@ public interface IAzureBlobService
 
 public class AzureBlobService : IAzureBlobService
 {
-    private readonly BlobServiceClient _blobServiceClient;
+    private readonly BlobServiceClient? _blobServiceClient;
     private readonly string _songsContainer;
     private readonly string _artistsContainer;
     private readonly string _albumsContainer;
+    private readonly string _playlistsContainer;
+    private readonly bool _isConfigured;
 
     public AzureBlobService(IConfiguration configuration)
     {
         var connectionString = configuration["AzureStorage:ConnectionString"];
-        if (string.IsNullOrEmpty(connectionString))
+        _isConfigured = !string.IsNullOrEmpty(connectionString);
+        
+        if (_isConfigured)
         {
-            throw new ArgumentException("Azure Storage connection string not found");
+            _blobServiceClient = new BlobServiceClient(connectionString);
         }
 
-        _blobServiceClient = new BlobServiceClient(connectionString);
         _songsContainer = configuration["AzureStorage:SongsContainer"] ?? "songs";
         _artistsContainer = configuration["AzureStorage:ArtistsContainer"] ?? "artists";
         _albumsContainer = configuration["AzureStorage:AlbumsContainer"] ?? "albums";
+        _playlistsContainer = configuration["AzureStorage:PlaylistsContainer"] ?? "playlists";
     }
 
     public async Task<string> UploadSongAsync(string songId, Stream fileStream, string fileName)
@@ -117,6 +123,26 @@ public class AzureBlobService : IAzureBlobService
         await blobClient.UploadAsync(imageStream, overwrite: true);
 
         return GenerateSasUrl(_albumsContainer, blobName, TimeSpan.FromDays(365));
+    }
+
+    public async Task<string> UploadPlaylistCoverAsync(string playlistId, Stream imageStream, string fileName)
+    {
+        if (!_isConfigured || _blobServiceClient == null)
+        {
+            // Return a placeholder URL for development when Azure Storage is not configured
+            return $"https://placeholder.dev/400x400/purple/white?text=Playlist+{playlistId.Substring(0, 8)}";
+        }
+
+        var containerClient = _blobServiceClient.GetBlobContainerClient(_playlistsContainer);
+        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
+
+        var coverGuid = Guid.NewGuid().ToString();
+        var blobName = $"{playlistId}/cover/{coverGuid}.jpg";
+
+        var blobClient = containerClient.GetBlobClient(blobName);
+        await blobClient.UploadAsync(imageStream, overwrite: true);
+
+        return GenerateSasUrl(_playlistsContainer, blobName, TimeSpan.FromDays(365));
     }
 
     public async Task<Stream> DownloadFileAsync(string containerName, string blobName)
@@ -304,6 +330,35 @@ public class AzureBlobService : IAzureBlobService
         {
             var containerClient = _blobServiceClient.GetBlobContainerClient(_albumsContainer);
             var prefix = $"{albumId}/cover/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeletePlaylistCoverFilesAsync(string playlistId)
+    {
+        if (!_isConfigured || _blobServiceClient == null)
+        {
+            // Return true for development when Azure Storage is not configured
+            return true;
+        }
+
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_playlistsContainer);
+            var prefix = $"{playlistId}/cover/";
             
             var deletedCount = 0;
             await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
