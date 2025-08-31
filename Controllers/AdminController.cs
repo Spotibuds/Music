@@ -803,6 +803,9 @@ public class AdminController : ControllerBase
             {
                 try
                 {
+                    // Delete old image files before uploading new one
+                    await _blobService.DeleteArtistImageFilesAsync(artist.Id);
+                    
                     var imageUrl = await _blobService.UploadArtistImageAsync(
                         artist.Id,
                         request.ImageFile.OpenReadStream(),
@@ -850,6 +853,9 @@ public class AdminController : ControllerBase
                 return BadRequest("Cannot delete artist with existing songs or albums");
             }
 
+            // Delete artist files from blob storage
+            await _blobService.DeleteArtistFilesAsync(id);
+
             await _context.Artists.DeleteOneAsync(a => a.Id == id);
             _logger.LogInformation("Deleted artist: {ArtistName} with ID: {ArtistId}", artist.Name, artist.Id);
 
@@ -881,6 +887,9 @@ public class AdminController : ControllerBase
                 await _context.Albums.UpdateOneAsync(albumFilter, albumUpdate);
             }
 
+            // Delete song files from blob storage
+            await _blobService.DeleteSongFilesAsync(id);
+
             await _context.Songs.DeleteOneAsync(s => s.Id == id);
             _logger.LogInformation("Deleted song: {SongTitle} with ID: {SongId}", song.Title, song.Id);
 
@@ -894,7 +903,7 @@ public class AdminController : ControllerBase
     }
 
     [HttpPut("songs/{id}")]
-    public async Task<ActionResult<Song>> UpdateSong(string id, [FromForm] CreateSongRequest request)
+    public async Task<ActionResult<Song>> UpdateSong(string id, [FromForm] UpdateSongRequest request)
     {
         try
         {
@@ -974,6 +983,9 @@ public class AdminController : ControllerBase
             {
                 try
                 {
+                    // Delete old audio files before uploading new one
+                    await _blobService.DeleteSongAudioFilesAsync(song.Id);
+                    
                     var audioUrl = await _blobService.UploadSongAsync(
                         song.Id,
                         request.AudioFile.OpenReadStream(),
@@ -992,6 +1004,9 @@ public class AdminController : ControllerBase
             {
                 try
                 {
+                    // Delete old cover files before uploading new one
+                    await _blobService.DeleteSongCoverFilesAsync(song.Id);
+                    
                     var coverUrl = await _blobService.UploadSongCoverAsync(
                         song.Id,
                         request.CoverFile.OpenReadStream(),
@@ -1010,6 +1025,9 @@ public class AdminController : ControllerBase
             {
                 try
                 {
+                    // Delete old snippet files before uploading new one
+                    await _blobService.DeleteSongSnippetFilesAsync(song.Id);
+                    
                     var snippetUrl = await _blobService.UploadSongSnippetAsync(
                         song.Id,
                         request.SnippetFile.OpenReadStream(),
@@ -1062,6 +1080,9 @@ public class AdminController : ControllerBase
                 var artistUpdate = Builders<Artist>.Update.PullFilter(a => a.Albums, al => al.Id == id);
                 await _context.Artists.UpdateOneAsync(artistFilter, artistUpdate);
             }
+
+            // Delete album files from blob storage
+            await _blobService.DeleteAlbumFilesAsync(id);
 
             await _context.Albums.DeleteOneAsync(a => a.Id == id);
             _logger.LogInformation("Deleted album: {AlbumTitle} with ID: {AlbumId}", album.Title, album.Id);
@@ -1136,6 +1157,9 @@ public class AdminController : ControllerBase
             {
                 try
                 {
+                    // Delete old cover files before uploading new one
+                    await _blobService.DeleteAlbumCoverFilesAsync(album.Id);
+                    
                     var coverUrl = await _blobService.UploadAlbumCoverAsync(
                         album.Id,
                         request.CoverFile.OpenReadStream(),
@@ -1179,6 +1203,18 @@ public class UpdateArtistRequest
     public string? Name { get; set; }
     public string? Bio { get; set; }
     public IFormFile? ImageFile { get; set; }
+}
+
+public class UpdateSongRequest
+{
+    public string? Title { get; set; }
+    public string? ArtistId { get; set; }
+    public string? AlbumId { get; set; }
+    public string? Genre { get; set; }
+    public int Duration { get; set; }
+    public IFormFile? AudioFile { get; set; }  // Optional for updates
+    public IFormFile? CoverFile { get; set; }
+    public IFormFile? SnippetFile { get; set; }
 }
 
 public class CreateAlbumRequest

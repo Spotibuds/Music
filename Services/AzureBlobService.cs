@@ -13,9 +13,18 @@ public interface IAzureBlobService
     Task<string> UploadAlbumCoverAsync(string albumId, Stream imageStream, string fileName);
     Task<Stream> DownloadFileAsync(string containerName, string blobName);
     Task<bool> DeleteFileAsync(string containerName, string blobName);
+    Task<bool> DeleteSongFilesAsync(string songId);
+    Task<bool> DeleteArtistFilesAsync(string artistId);
+    Task<bool> DeleteAlbumFilesAsync(string albumId);
+    Task<bool> DeleteSongAudioFilesAsync(string songId);
+    Task<bool> DeleteSongCoverFilesAsync(string songId);
+    Task<bool> DeleteSongSnippetFilesAsync(string songId);
+    Task<bool> DeleteArtistImageFilesAsync(string artistId);
+    Task<bool> DeleteAlbumCoverFilesAsync(string albumId);
     Task<List<string>> ListFilesAsync(string containerName, string prefix = "");
     BlobContainerClient GetBlobContainerClient(string containerName);
     string GenerateSasUrl(string containerName, string blobName, TimeSpan? expiry = null);
+    Task UpdateContainerAccessLevelAsync(string containerName);
 }
 
 public class AzureBlobService : IAzureBlobService
@@ -128,6 +137,190 @@ public class AzureBlobService : IAzureBlobService
         return response.Value;
     }
 
+    public async Task<bool> DeleteSongFilesAsync(string songId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
+            var prefix = $"{songId}/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteArtistFilesAsync(string artistId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_artistsContainer);
+            var prefix = $"{artistId}/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteAlbumFilesAsync(string albumId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_albumsContainer);
+            var prefix = $"{albumId}/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteSongAudioFilesAsync(string songId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
+            var prefix = $"{songId}/song/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteSongCoverFilesAsync(string songId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
+            var prefix = $"{songId}/cover/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteSongSnippetFilesAsync(string songId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
+            var prefix = $"{songId}/snippet/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteArtistImageFilesAsync(string artistId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_artistsContainer);
+            var prefix = $"{artistId}/profilePicture/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteAlbumCoverFilesAsync(string albumId)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_albumsContainer);
+            var prefix = $"{albumId}/cover/";
+            
+            var deletedCount = 0;
+            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var deleted = await blobClient.DeleteIfExistsAsync();
+                if (deleted.Value) deletedCount++;
+            }
+            
+            return deletedCount > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     public async Task<List<string>> ListFilesAsync(string containerName, string prefix = "")
     {
         var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
@@ -148,26 +341,76 @@ public class AzureBlobService : IAzureBlobService
 
     public string GenerateSasUrl(string containerName, string blobName, TimeSpan? expiry = null)
     {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-        var blobClient = containerClient.GetBlobClient(blobName);
-
-        // Check if we can generate SAS (requires account key)
-        if (!blobClient.CanGenerateSasUri)
+        try
         {
-            // Fallback to direct URL (won't work with private containers)
-            return blobClient.Uri.ToString();
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            Console.WriteLine($"Attempting to generate SAS URL for: {containerName}/{blobName}");
+            Console.WriteLine($"CanGenerateSasUri: {blobClient.CanGenerateSasUri}");
+            Console.WriteLine($"Blob URI: {blobClient.Uri}");
+
+            // Check if we can generate SAS (requires account key)
+            if (!blobClient.CanGenerateSasUri)
+            {
+                Console.WriteLine($"ERROR: Cannot generate SAS URI for {containerName}/{blobName}");
+                Console.WriteLine($"This usually indicates:");
+                Console.WriteLine($"1. Connection string doesn't include AccountKey");
+                Console.WriteLine($"2. Using managed identity without delegation");
+                Console.WriteLine($"3. Storage account configuration issue");
+                
+                // Try to extract account name from URI for debugging
+                var uri = blobClient.Uri.ToString();
+                Console.WriteLine($"Storage account URI: {uri}");
+                
+                throw new InvalidOperationException($"Cannot generate SAS URI for blob {blobName}. Check connection string and Azure Storage account configuration.");
+            }
+
+            var sasBuilder = new BlobSasBuilder
+            {
+                BlobContainerName = containerName,
+                BlobName = blobName,
+                Resource = "b", // blob resource
+                ExpiresOn = DateTimeOffset.UtcNow.Add(expiry ?? TimeSpan.FromDays(365)) // Long-lived for media files
+            };
+
+            sasBuilder.SetPermissions(BlobSasPermissions.Read);
+
+            var sasUrl = blobClient.GenerateSasUri(sasBuilder).ToString();
+            Console.WriteLine($"SUCCESS: Generated SAS URL for {containerName}/{blobName}");
+            return sasUrl;
         }
-
-        var sasBuilder = new BlobSasBuilder
+        catch (Exception ex)
         {
-            BlobContainerName = containerName,
-            BlobName = blobName,
-            Resource = "b", // blob resource
-            ExpiresOn = DateTimeOffset.UtcNow.Add(expiry ?? TimeSpan.FromHours(1)) // Default 1 hour expiry
-        };
+            Console.WriteLine($"EXCEPTION generating SAS URL for {containerName}/{blobName}: {ex.Message}");
+            Console.WriteLine($"Exception type: {ex.GetType().Name}");
+            throw;
+        }
+    }
 
-        sasBuilder.SetPermissions(BlobSasPermissions.Read);
+    public async Task UpdateContainerAccessLevelAsync(string containerName)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            
+            // Check if container exists
+            var exists = await containerClient.ExistsAsync();
+            if (!exists.Value)
+            {
+                Console.WriteLine($"Container {containerName} does not exist, creating with public blob access");
+                await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+                return;
+            }
 
-        return blobClient.GenerateSasUri(sasBuilder).ToString();
+            // Update existing container to allow public blob access
+            await containerClient.SetAccessPolicyAsync(PublicAccessType.Blob);
+            Console.WriteLine($"Updated container {containerName} to allow public blob access");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating container access level for {containerName}: {ex.Message}");
+            throw;
+        }
     }
 }
