@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using Music.Data;
 using Music.Models;
+using Music.Services;
 
 namespace Music.Controllers;
 
@@ -10,10 +11,12 @@ namespace Music.Controllers;
 public class PlaylistsController : ControllerBase
 {
     private readonly MongoDbContext _context;
+    private readonly IAzureBlobService _blobService;
 
-    public PlaylistsController(MongoDbContext context)
+    public PlaylistsController(MongoDbContext context, IAzureBlobService blobService)
     {
         _context = context;
+        _blobService = blobService;
     }
 
     [HttpGet]
@@ -66,6 +69,7 @@ public class PlaylistsController : ControllerBase
                 Name = playlist.Name,
                 Description = playlist.Description,
                 CreatedBy = playlist.CreatedBy,
+                CoverUrl = playlist.CoverUrl,
                 Songs = playlistSongs,
                 CreatedAt = playlist.CreatedAt,
                 UpdatedAt = playlist.UpdatedAt
@@ -127,6 +131,7 @@ public class PlaylistsController : ControllerBase
             Name = playlist.Name,
             Description = playlist.Description,
             CreatedBy = playlist.CreatedBy,
+            CoverUrl = playlist.CoverUrl,
             Songs = playlistSongs,
             CreatedAt = playlist.CreatedAt,
             UpdatedAt = playlist.UpdatedAt
@@ -348,7 +353,8 @@ public class PlaylistsController : ControllerBase
                 Songs = playlistSongs,
                 CreatedBy = playlist.CreatedBy,
                 CreatedAt = playlist.CreatedAt,
-                UpdatedAt = playlist.UpdatedAt
+                UpdatedAt = playlist.UpdatedAt,
+                CoverUrl = playlist.CoverUrl
             });
         }
 
@@ -385,6 +391,114 @@ public class PlaylistsController : ControllerBase
 
         return CreatedAtAction(nameof(GetPlaylist), new { id = playlist.Id }, playlistDto);
     }
+
+    [HttpPost("{id}/cover")]
+    public async Task<IActionResult> UploadPlaylistCover(string id, IFormFile file)
+    {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
+        if (file == null || file.Length == 0)
+        {
+            return BadRequest(new { message = "No file provided" });
+        }
+
+        // Validate file type
+        var allowedTypes = new[] { "image/jpeg", "image/jpg", "image/png", "image/webp" };
+        if (!allowedTypes.Contains(file.ContentType?.ToLower()))
+        {
+            return BadRequest(new { message = "Invalid file type. Only JPEG, PNG, and WebP images are allowed." });
+        }
+
+        // Validate file size (max 10MB)
+        if (file.Length > 10 * 1024 * 1024)
+        {
+            return BadRequest(new { message = "File size too large. Maximum size is 10MB." });
+        }
+
+        try
+        {
+            // Check if playlist exists
+            var playlist = await _context.Playlists
+                .Find(p => p.Id == id)
+                .FirstOrDefaultAsync();
+
+            if (playlist == null)
+            {
+                return NotFound(new { message = "Playlist not found" });
+            }
+
+            // Delete old cover if it exists
+            if (!string.IsNullOrEmpty(playlist.CoverUrl))
+            {
+                try
+                {
+                    await _blobService.DeletePlaylistCoverFilesAsync(id);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Could not delete old playlist cover: {ex.Message}");
+                }
+            }
+
+            // Upload new cover
+            var coverUrl = await _blobService.UploadPlaylistCoverAsync(id, file.OpenReadStream(), file.FileName);
+            Console.WriteLine($"Generated cover URL: {coverUrl}");
+                
+            // Update playlist with new cover URL
+            var update = Builders<Playlist>.Update.Set(p => p.CoverUrl, coverUrl);
+            var updateResult = await _context.Playlists.UpdateOneAsync(p => p.Id == id, update);
+            Console.WriteLine($"MongoDB update result - Matched: {updateResult.MatchedCount}, Modified: {updateResult.ModifiedCount}");
+
+            return Ok(new { coverUrl });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error uploading playlist cover: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to upload cover image" });
+        }
+    }
+
+    [HttpDelete("{id}/cover")]
+    public async Task<IActionResult> DeletePlaylistCover(string id)
+    {
+        if (!_context.IsConnected || _context.Playlists == null)
+        {
+            return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
+        try
+        {
+            // Check if playlist exists
+            var playlist = await _context.Playlists
+                .Find(p => p.Id == id)
+                .FirstOrDefaultAsync();
+
+            if (playlist == null)
+            {
+                return NotFound(new { message = "Playlist not found" });
+            }
+
+            // Delete cover from blob storage
+            if (!string.IsNullOrEmpty(playlist.CoverUrl))
+            {
+                await _blobService.DeletePlaylistCoverFilesAsync(id);
+            }
+
+            // Remove cover URL from database
+            var update = Builders<Playlist>.Update.Unset(p => p.CoverUrl);
+            await _context.Playlists.UpdateOneAsync(p => p.Id == id, update);
+
+            return Ok(new { message = "Cover image deleted successfully" });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error deleting playlist cover: {ex.Message}");
+            return StatusCode(500, new { message = "Failed to delete cover image" });
+        }
+    }
 }
 
 public class PlaylistDto
@@ -393,6 +507,7 @@ public class PlaylistDto
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? CreatedBy { get; set; }
+    public string? CoverUrl { get; set; }
     public List<PlaylistSongDto> Songs { get; set; } = new();
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

@@ -11,6 +11,8 @@ public class Playlist : BaseEntity
     [Required]
     public Guid OwnerId { get; set; }
 
+    public string? CoverUrl { get; set; }
+
     // Navigation properties
     public virtual ICollection<PlaylistSong> PlaylistSongs { get; set; } = new List<PlaylistSong>();
 } 

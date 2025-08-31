@@ -18,6 +18,9 @@ public class Playlist
     [BsonElement("createdBy")]
     public string? CreatedBy { get; set; }
 
+    [BsonElement("coverUrl")]
+    public string? CoverUrl { get; set; }
+
     [BsonElement("songs")]
     public List<SongReference> Songs { get; set; } = new List<SongReference>();
 
