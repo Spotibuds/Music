@@ -156,22 +156,8 @@ if (app.Environment.IsProduction())
 {
     app.UseHttpsRedirection();
 }
-app.UseCors("SpotibudsPolicy");
 
-app.Use(async (context, next) =>
-{
-    context.Response.Headers["Access-Control-Allow-Origin"] = "*";
-    context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
-    context.Response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
-    
-    if (context.Request.Method == "OPTIONS")
-    {
-        context.Response.StatusCode = 200;
-        return;
-    }
-    
-    await next();
-});
+app.UseCors("SpotibudsPolicy");
 
 app.UseAuthentication();
 app.UseAuthorization();
