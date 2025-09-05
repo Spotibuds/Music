@@ -5,11 +5,13 @@ using Music.Data;
 using Music.Services;
 using Music.Models;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
 
 namespace Music.Controllers;
 
 [ApiController]
 [Route("api/admin")]
+[Authorize(Roles = "Admin")]
 public class AdminController : ControllerBase
 {
     private readonly MongoDbContext _context;
