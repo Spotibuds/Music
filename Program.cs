@@ -3,8 +3,6 @@ using MongoDB.Bson;
 using Music.Data;
 using Music.Services;
 using StackExchange.Redis;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,28 +10,8 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.Authority = builder.Configuration["Jwt:Authority"]; 
-        options.Audience = builder.Configuration["Jwt:Audience"];   
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateAudience = true,
-            RoleClaimType = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role" 
-        };
-    });
-
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("AdminOnly", policy =>
-        policy.RequireRole("Admin"));
-});
-
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__Redis");
-
-
 
 if (string.IsNullOrEmpty(redisConnectionString))
 {
@@ -163,7 +141,6 @@ builder.Services.AddCors(options =>
     });
 });
 
-
 builder.WebHost.UseUrls($"http://0.0.0.0:80");
 
 var app = builder.Build();
@@ -179,7 +156,21 @@ if (app.Environment.IsProduction())
 
 app.UseCors("SpotibudsPolicy");
 
-app.UseAuthentication();
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+    context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+    context.Response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+    
+    if (context.Request.Method == "OPTIONS")
+    {
+        context.Response.StatusCode = 200;
+        return;
+    }
+    
+    await next();
+});
+
 app.UseAuthorization();
 app.MapControllers();
 
