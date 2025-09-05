@@ -10,8 +10,8 @@ using Microsoft.AspNetCore.Authorization;
 namespace Music.Controllers;
 
 [ApiController]
+[Authorize(Policy = "AdminOnly")]
 [Route("api/admin")]
-[Authorize(Roles = "Admin")]
 public class AdminController : ControllerBase
 {
     private readonly MongoDbContext _context;

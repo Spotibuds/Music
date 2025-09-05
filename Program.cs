@@ -3,12 +3,32 @@ using MongoDB.Bson;
 using Music.Data;
 using Music.Services;
 using StackExchange.Redis;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = builder.Configuration["Jwt:Authority"]; 
+        options.Audience = builder.Configuration["Jwt:Audience"];   
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateAudience = true,
+            RoleClaimType = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role" 
+        };
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy =>
+        policy.RequireRole("Admin"));
+});
 
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__Redis");
@@ -50,11 +70,11 @@ builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
     {
         return null!;
     }
-    
+
     try
     {
         var settings = MongoClientSettings.FromConnectionString(connectionString);
-        
+
         // Improved connection settings for better reliability
         settings.ServerSelectionTimeout = TimeSpan.FromSeconds(30); // Reduced from 60 to fail faster
         settings.ConnectTimeout = TimeSpan.FromSeconds(30); // Reduced from 60 to fail faster
@@ -67,17 +87,17 @@ builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
         settings.HeartbeatTimeout = TimeSpan.FromSeconds(10);
         settings.RetryWrites = true;
         settings.RetryReads = true;
-        
 
-        
 
-        
+
+
+
         var client = new MongoClient(settings);
-        
+
         // Test the connection with retry logic
         var maxRetries = 2; // Reduced from 3 to fail faster
         var retryCount = 0;
-        
+
         while (retryCount < maxRetries)
         {
             try
@@ -88,17 +108,17 @@ builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
             catch (Exception ex)
             {
                 retryCount++;
-                
+
                 if (retryCount >= maxRetries)
                 {
                     return null!;
                 }
-                
+
                 // Wait before retrying
                 Thread.Sleep(1000); // Reduced wait time
             }
         }
-        
+
         return client;
     }
     catch (Exception ex)
@@ -179,7 +199,7 @@ app.MapGet("/health/mongodb", async (MongoDbContext dbContext) =>
                 statusCode: 503
             );
         }
-        
+
         var database = dbContext.Songs.Database;
         await database.RunCommandAsync<MongoDB.Bson.BsonDocument>(new MongoDB.Bson.BsonDocument("ping", 1));
         return Results.Ok(new { status = "healthy", service = "mongodb", timestamp = DateTime.UtcNow });
@@ -241,7 +261,7 @@ app.MapGet("/diagnostics/mongodb", async (IMongoClient mongoClient, MongoDbConte
 
         // Test connection
         var connectionTest = await dbContext.TestConnectionAsync();
-        
+
         return Results.Ok(new
         {
             diagnostics.timestamp,
@@ -267,4 +287,4 @@ app.MapGet("/diagnostics/mongodb", async (IMongoClient mongoClient, MongoDbConte
 
 
 
-app.Run(); 
+app.Run();
