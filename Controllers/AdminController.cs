@@ -4,13 +4,10 @@ using MongoDB.Bson;
 using Music.Data;
 using Music.Services;
 using Music.Models;
-using System.Text.Json;
-using Microsoft.AspNetCore.Authorization;
 
 namespace Music.Controllers;
 
 [ApiController]
-[Authorize(Policy = "AdminOnly")]
 [Route("api/admin")]
 public class AdminController : ControllerBase
 {
