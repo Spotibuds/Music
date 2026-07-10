@@ -31,6 +31,9 @@ jobs:
     - name: Build Music API
       run: dotnet build Music.csproj --configuration Release --no-restore
 
+    - name: Run Music API tests
+      run: dotnet test tests/Music.Tests/Music.Tests.csproj --configuration Release
+
     - name: Check vulnerable packages
       run: dotnet list Music.csproj package --vulnerable --include-transitive
 
