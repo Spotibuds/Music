@@ -85,7 +85,7 @@ The current suite covers playlist owner/admin decisions, MongoDB dependency fail
 
 ## Security notes
 
-The current codebase contains historical commits with Azure Storage configuration. Those values should be treated as compromised and rotated by the organisation owners; deleting them from the current tree does not remove them from Git history. Administrative write routes and operational cache routes also need explicit authentication and authorization before public deployment.
+Application secrets are supplied through runtime configuration and are not committed. Administrative write routes and operational cache routes also need explicit authentication and authorization before public deployment.
 
 ## Authentication and route boundary
 
