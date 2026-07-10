@@ -205,28 +205,67 @@ app.MapGet("/health/mongodb", async (MongoDbContext dbContext) =>
     }
 });
 
-// Comprehensive MongoDB diagnostic endpoint
-app.MapGet("/diagnostics/mongodb", async (IMongoClient mongoClient, MongoDbContext dbContext) =>
+if (app.Environment.IsDevelopment())
 {
-    var diagnostics = new
+    // Detailed diagnostics are intentionally development-only: production health
+    // checks should not disclose dependency topology or exception details.
+    app.MapGet("/diagnostics/mongodb", async (IMongoClient mongoClient, MongoDbContext dbContext) =>
     {
-        timestamp = DateTime.UtcNow,
-        mongoClient = mongoClient != null ? "Available" : "Null",
-        dbContextConnected = dbContext.IsConnected,
-        connectionTest = false,
-        collections = new
+        var diagnostics = new
         {
-            songs = dbContext.Songs != null ? "Available" : "Null",
-            albums = dbContext.Albums != null ? "Available" : "Null",
-            artists = dbContext.Artists != null ? "Available" : "Null",
-            playlists = dbContext.Playlists != null ? "Available" : "Null"
-        },
-        error = (string?)null
-    };
+            timestamp = DateTime.UtcNow,
+            mongoClient = mongoClient != null ? "Available" : "Null",
+            dbContextConnected = dbContext.IsConnected,
+            connectionTest = false,
+            collections = new
+            {
+                songs = dbContext.Songs != null ? "Available" : "Null",
+                albums = dbContext.Albums != null ? "Available" : "Null",
+                artists = dbContext.Artists != null ? "Available" : "Null",
+                playlists = dbContext.Playlists != null ? "Available" : "Null"
+            },
+            error = (string?)null
+        };
 
-    try
-    {
-        if (mongoClient == null)
+        try
+        {
+            if (mongoClient == null)
+            {
+                return Results.Ok(new
+                {
+                    diagnostics.timestamp,
+                    diagnostics.mongoClient,
+                    diagnostics.dbContextConnected,
+                    diagnostics.collections,
+                    error = "MongoDB client is null"
+                });
+            }
+
+            if (!dbContext.IsConnected)
+            {
+                return Results.Ok(new
+                {
+                    diagnostics.timestamp,
+                    diagnostics.mongoClient,
+                    diagnostics.dbContextConnected,
+                    diagnostics.collections,
+                    error = "MongoDB context is not connected"
+                });
+            }
+
+            var connectionTest = await dbContext.TestConnectionAsync();
+
+            return Results.Ok(new
+            {
+                diagnostics.timestamp,
+                diagnostics.mongoClient,
+                diagnostics.dbContextConnected,
+                connectionTest,
+                diagnostics.collections,
+                diagnostics.error
+            });
+        }
+        catch (Exception ex)
         {
             return Results.Ok(new
             {
@@ -234,47 +273,11 @@ app.MapGet("/diagnostics/mongodb", async (IMongoClient mongoClient, MongoDbConte
                 diagnostics.mongoClient,
                 diagnostics.dbContextConnected,
                 diagnostics.collections,
-                error = "MongoDB client is null"
+                error = ex.Message
             });
         }
-
-        if (!dbContext.IsConnected)
-        {
-            return Results.Ok(new
-            {
-                diagnostics.timestamp,
-                diagnostics.mongoClient,
-                diagnostics.dbContextConnected,
-                diagnostics.collections,
-                error = "MongoDB context is not connected"
-            });
-        }
-
-        // Test connection
-        var connectionTest = await dbContext.TestConnectionAsync();
-
-        return Results.Ok(new
-        {
-            diagnostics.timestamp,
-            diagnostics.mongoClient,
-            diagnostics.dbContextConnected,
-            connectionTest,
-            diagnostics.collections,
-            diagnostics.error
-        });
-    }
-    catch (Exception ex)
-    {
-        return Results.Ok(new
-        {
-            diagnostics.timestamp,
-            diagnostics.mongoClient,
-            diagnostics.dbContextConnected,
-            diagnostics.collections,
-            error = ex.Message
-        });
-    }
-});
+    });
+}
 
 
 
