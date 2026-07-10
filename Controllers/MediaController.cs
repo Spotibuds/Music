@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Music.Services;
@@ -206,7 +207,7 @@ public class MediaController : ControllerBase
             
             return File(audioStream, contentType, enableRangeProcessing: true);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return NotFound("Audio not found");
         }
@@ -226,12 +227,18 @@ public class MediaController : ControllerBase
         };
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpGet("cache/status")]
     public async Task<IActionResult> GetCacheStatus()
     {
         try
         {
             var redisConnectionString = _configuration.GetConnectionString("Redis");
+            if (string.IsNullOrWhiteSpace(redisConnectionString))
+            {
+                return Problem("Redis connection is not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             var server = _redisDatabase.Multiplexer.GetServer(redisConnectionString);
             var keys = server.Keys(pattern: "image_*").Take(20).ToList();
             
@@ -254,12 +261,18 @@ public class MediaController : ControllerBase
         }
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("cache/clear")]
     public async Task<IActionResult> ClearCache()
     {
         try
         {
             var redisConnectionString = _configuration.GetConnectionString("Redis");
+            if (string.IsNullOrWhiteSpace(redisConnectionString))
+            {
+                return Problem("Redis connection is not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             var server = _redisDatabase.Multiplexer.GetServer(redisConnectionString);
             var keys = server.Keys(pattern: "image_*");
             var deletedCount = 0;

@@ -1,14 +1,48 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using MongoDB.Driver;
 using MongoDB.Bson;
 using Music.Data;
 using Music.Services;
 using StackExchange.Redis;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+var jwtSecret = builder.Configuration["Jwt:Secret"];
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SpotibudsIdentity";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "SpotibudsApp";
+
+if (string.IsNullOrWhiteSpace(jwtSecret))
+{
+    throw new InvalidOperationException("Jwt:Secret is required and must be supplied by runtime configuration.");
+}
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwtIssuer,
+            ValidateAudience = true,
+            ValidAudience = jwtAudience,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"));
+});
 
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__Redis");
@@ -83,7 +117,7 @@ builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
                 client.GetDatabase("admin").RunCommandAsync((Command<BsonDocument>)"{ping:1}").Wait(TimeSpan.FromSeconds(10)); // Reduced timeout
                 break;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 retryCount++;
 
@@ -99,7 +133,7 @@ builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
 
         return client;
     }
-    catch (Exception ex)
+    catch (Exception)
     {
         return null!;
     }
@@ -171,6 +205,7 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 

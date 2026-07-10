@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using Music.Data;
@@ -151,6 +152,7 @@ public class AlbumsController : ControllerBase
         return Ok(orderedSongs);
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost]
     public async Task<ActionResult<AlbumDto>> CreateAlbum(CreateAlbumDto dto)
     {
@@ -182,6 +184,7 @@ public class AlbumsController : ControllerBase
         return CreatedAtAction(nameof(GetAlbum), new { id = album.Id }, albumDto);
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("{id}/upload-cover")]
     public async Task<IActionResult> UploadAlbumCover(string id, IFormFile imageFile)
     {
@@ -220,6 +223,7 @@ public class AlbumsController : ControllerBase
         }
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateAlbum(string id, UpdateAlbumDto dto)
     {
@@ -254,6 +258,7 @@ public class AlbumsController : ControllerBase
         return NoContent();
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("{albumId}/songs/{songId}")]
     public async Task<IActionResult> AddSongToAlbum(string albumId, string songId, [FromQuery] int position = -1)
     {
@@ -313,6 +318,7 @@ public class AlbumsController : ControllerBase
         return Ok();
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteAlbum(string id)
     {
@@ -356,4 +362,4 @@ public class UpdateAlbumDto
     public ArtistReference? Artist { get; set; }
     public string? CoverUrl { get; set; }
     public DateTime? ReleaseDate { get; set; }
-} 
+}
