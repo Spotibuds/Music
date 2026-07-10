@@ -1,8 +1,10 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using Music.Data;
 using Music.Models;
 using Music.Services;
+using System.Security.Claims;
 
 namespace Music.Controllers;
 
@@ -18,6 +20,11 @@ public class PlaylistsController : ControllerBase
         _context = context;
         _blobService = blobService;
     }
+
+    private string? CurrentUserId => User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+
+    private bool CanManage(Playlist playlist) =>
+        User.IsInRole("Admin") || (!string.IsNullOrEmpty(CurrentUserId) && playlist.CreatedBy == CurrentUserId);
 
     [HttpGet]
     public async Task<ActionResult<IEnumerable<PlaylistDto>>> GetPlaylists()
@@ -140,6 +147,7 @@ public class PlaylistsController : ControllerBase
         return Ok(playlistDto);
     }
 
+    [Authorize]
     [HttpPost]
     public async Task<ActionResult<PlaylistDto>> CreatePlaylist(CreatePlaylistDto dto)
     {
@@ -148,10 +156,16 @@ public class PlaylistsController : ControllerBase
             return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
 
+        if (CurrentUserId is null)
+        {
+            return Unauthorized();
+        }
+
         var playlist = new Playlist
         {
             Name = dto.Name,
-            Description = dto.Description
+            Description = dto.Description,
+            CreatedBy = CurrentUserId
         };
 
         await _context.Playlists.InsertOneAsync(playlist);
@@ -170,12 +184,24 @@ public class PlaylistsController : ControllerBase
         return CreatedAtAction(nameof(GetPlaylist), new { id = playlist.Id }, playlistDto);
     }
 
+    [Authorize]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdatePlaylist(string id, UpdatePlaylistDto dto)
     {
         if (!_context.IsConnected || _context.Playlists == null)
         {
             return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
+        var playlist = await _context.Playlists.Find(p => p.Id == id).FirstOrDefaultAsync();
+        if (playlist == null)
+        {
+            return NotFound();
+        }
+
+        if (!CanManage(playlist))
+        {
+            return Forbid();
         }
 
         var updateDefinition = Builders<Playlist>.Update.Set(p => p.UpdatedAt, DateTime.UtcNow);
@@ -186,18 +212,12 @@ public class PlaylistsController : ControllerBase
         if (dto.Description != null)
             updateDefinition = updateDefinition.Set(p => p.Description, dto.Description);
 
-        var result = await _context.Playlists.UpdateOneAsync(
-            p => p.Id == id,
-            updateDefinition);
-
-        if (result.MatchedCount == 0)
-        {
-            return NotFound();
-        }
+        await _context.Playlists.UpdateOneAsync(p => p.Id == id, updateDefinition);
 
         return NoContent();
     }
 
+    [Authorize]
     [HttpPost("{playlistId}/songs/{songId}")]
     public async Task<IActionResult> AddSongToPlaylist(string playlistId, string songId, [FromQuery] int position = -1)
     {
@@ -213,6 +233,11 @@ public class PlaylistsController : ControllerBase
         if (playlist == null)
         {
             return NotFound("Playlist not found");
+        }
+
+        if (!CanManage(playlist))
+        {
+            return Forbid();
         }
 
         var song = await _context.Songs
@@ -251,6 +276,17 @@ public class PlaylistsController : ControllerBase
             AddedAt = DateTime.UtcNow
         };
 
+        var playlistForUpdate = await _context.Playlists.Find(p => p.Id == playlistId).FirstOrDefaultAsync();
+        if (playlistForUpdate == null)
+        {
+            return NotFound("Playlist not found");
+        }
+
+        if (!CanManage(playlistForUpdate))
+        {
+            return Forbid();
+        }
+
         var updateDefinition = Builders<Playlist>.Update
             .Push(p => p.Songs, songReference)
             .Set(p => p.UpdatedAt, DateTime.UtcNow);
@@ -260,6 +296,7 @@ public class PlaylistsController : ControllerBase
         return Ok();
     }
 
+    [Authorize]
     [HttpDelete("{playlistId}/songs/{songId}")]
     public async Task<IActionResult> RemoveSongFromPlaylist(string playlistId, string songId)
     {
@@ -268,20 +305,27 @@ public class PlaylistsController : ControllerBase
             return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
 
-        var updateDefinition = Builders<Playlist>.Update
-            .PullFilter(p => p.Songs, s => s.Id == songId)
-            .Set(p => p.UpdatedAt, DateTime.UtcNow);
-
-        var result = await _context.Playlists.UpdateOneAsync(p => p.Id == playlistId, updateDefinition);
-
-        if (result.MatchedCount == 0)
+        var playlist = await _context.Playlists.Find(p => p.Id == playlistId).FirstOrDefaultAsync();
+        if (playlist == null)
         {
             return NotFound("Playlist not found");
         }
 
+        if (!CanManage(playlist))
+        {
+            return Forbid();
+        }
+
+        var updateDefinition = Builders<Playlist>.Update
+            .PullFilter(p => p.Songs, s => s.Id == songId)
+            .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+        await _context.Playlists.UpdateOneAsync(p => p.Id == playlistId, updateDefinition);
+
         return NoContent();
     }
 
+    [Authorize]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeletePlaylist(string id)
     {
@@ -290,12 +334,18 @@ public class PlaylistsController : ControllerBase
             return StatusCode(503, new { message = "Database temporarily unavailable" });
         }
 
-        var result = await _context.Playlists.DeleteOneAsync(p => p.Id == id);
-
-        if (result.DeletedCount == 0)
+        var playlist = await _context.Playlists.Find(p => p.Id == id).FirstOrDefaultAsync();
+        if (playlist == null)
         {
             return NotFound();
         }
+
+        if (!CanManage(playlist))
+        {
+            return Forbid();
+        }
+
+        await _context.Playlists.DeleteOneAsync(p => p.Id == id);
 
         return NoContent();
     }
@@ -361,12 +411,18 @@ public class PlaylistsController : ControllerBase
         return Ok(playlistDtos);
     }
 
+    [Authorize]
     [HttpPost("user/{userId}")]
     public async Task<ActionResult<PlaylistDto>> CreateUserPlaylist(string userId, CreateUserPlaylistDto dto)
     {
         if (!_context.IsConnected || _context.Playlists == null)
         {
             return StatusCode(503, new { message = "Database temporarily unavailable" });
+        }
+
+        if (!User.IsInRole("Admin") && CurrentUserId != userId)
+        {
+            return Forbid();
         }
 
         var playlist = new Playlist
@@ -392,6 +448,7 @@ public class PlaylistsController : ControllerBase
         return CreatedAtAction(nameof(GetPlaylist), new { id = playlist.Id }, playlistDto);
     }
 
+    [Authorize]
     [HttpPost("{id}/cover")]
     public async Task<IActionResult> UploadPlaylistCover(string id, IFormFile file)
     {
@@ -430,6 +487,11 @@ public class PlaylistsController : ControllerBase
                 return NotFound(new { message = "Playlist not found" });
             }
 
+            if (!CanManage(playlist))
+            {
+                return Forbid();
+            }
+
             // Delete old cover if it exists
             if (!string.IsNullOrEmpty(playlist.CoverUrl))
             {
@@ -461,6 +523,7 @@ public class PlaylistsController : ControllerBase
         }
     }
 
+    [Authorize]
     [HttpDelete("{id}/cover")]
     public async Task<IActionResult> DeletePlaylistCover(string id)
     {
@@ -479,6 +542,11 @@ public class PlaylistsController : ControllerBase
             if (playlist == null)
             {
                 return NotFound(new { message = "Playlist not found" });
+            }
+
+            if (!CanManage(playlist))
+            {
+                return Forbid();
             }
 
             // Delete cover from blob storage
@@ -546,4 +614,4 @@ public class UpdatePlaylistDto
 {
     public string? Name { get; set; }
     public string? Description { get; set; }
-} 
+}

@@ -80,3 +80,13 @@ There is currently no automated test project in this repository. A local Release
 ## Security notes
 
 The current codebase contains historical commits with Azure Storage configuration. Those values should be treated as compromised and rotated by the organisation owners; deleting them from the current tree does not remove them from Git history. Administrative write routes and operational cache routes also need explicit authentication and authorization before public deployment.
+
+## Authentication and route boundary
+
+The API validates the same JWT shape as the Spotibuds Identity service: `Jwt:Secret`, `Jwt:Issuer` (default `SpotibudsIdentity`), and `Jwt:Audience` (default `SpotibudsApp`). Secrets are supplied through runtime configuration such as `Jwt__Secret`; no second login or token format is introduced.
+
+- Public: catalogue reads, search, media reads, Swagger, `/health`, and `/health/mongodb`.
+- Admin role required: `/api/admin/**` and catalogue writes for songs, albums, and artists.
+- Authenticated owner or Admin role required: playlist creation, playlist updates/deletes, playlist song changes, playlist covers, and Redis cache status/clear operations.
+
+The public routes are intentionally read-only or operational health checks. Admin and owner checks prevent unauthenticated writes and prevent one user from modifying another user's playlist.

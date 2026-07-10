@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Music.Services;
@@ -226,6 +227,7 @@ public class MediaController : ControllerBase
         };
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpGet("cache/status")]
     public async Task<IActionResult> GetCacheStatus()
     {
@@ -254,6 +256,7 @@ public class MediaController : ControllerBase
         }
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("cache/clear")]
     public async Task<IActionResult> ClearCache()
     {

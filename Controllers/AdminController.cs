@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using MongoDB.Bson;
@@ -9,6 +10,7 @@ namespace Music.Controllers;
 
 [ApiController]
 [Route("api/admin")]
+[Authorize(Policy = "AdminOnly")]
 public class AdminController : ControllerBase
 {
     private readonly MongoDbContext _context;
