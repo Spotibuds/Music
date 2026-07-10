@@ -6,17 +6,17 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: spotibuds.azurecr.io
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:20.10.7
-        options: --privileged
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -25,8 +25,37 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
+    - name: Restore dependencies
+      run: dotnet restore Music.csproj
+
+    - name: Build Music API
+      run: dotnet build Music.csproj --configuration Release --no-restore
+
+    - name: Check vulnerable packages
+      run: dotnet list Music.csproj package --vulnerable --include-transitive
+
+    - name: Build Music API image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./
+        file: ./Dockerfile
+        load: true
+        tags: spotibuds-music-api:${{ env.IMAGE_TAG }}
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
     - name: Log in to Azure Container Registry
-      uses: azure/docker-login@v1
+      uses: azure/docker-login@v2
       with:
         login-server: ${{ env.REGISTRY }}
         username: ${{ secrets.ACR_USERNAME }}
@@ -45,4 +74,4 @@ jobs:
       with:
         app-name: music-spotibuds
         publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_MUSIC }}
-        images: ${{ env.REGISTRY }}/music-api:${{ env.IMAGE_TAG }} 
+        images: ${{ env.REGISTRY }}/music-api:${{ env.IMAGE_TAG }}
