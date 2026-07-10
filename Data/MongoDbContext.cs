@@ -28,13 +28,13 @@ public class MongoDbContext
                     
                     _isConnected = true;
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     _database = null;
                     _isConnected = false;
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 _database = null;
                 _isConnected = false;
@@ -66,7 +66,7 @@ public class MongoDbContext
             await _database.RunCommandAsync<MongoDB.Bson.BsonDocument>(new MongoDB.Bson.BsonDocument("ping", 1));
             return true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return false;
         }
@@ -82,7 +82,7 @@ public class MongoDbContext
             {
                 return await operation();
             }
-            catch (MongoDB.Driver.MongoConnectionException ex)
+            catch (MongoDB.Driver.MongoConnectionException)
             {
                 retryCount++;
                 
@@ -110,4 +110,4 @@ public class MongoDbContext
         
         return default(T);
     }
-} 
+}

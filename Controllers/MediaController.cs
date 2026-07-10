@@ -207,7 +207,7 @@ public class MediaController : ControllerBase
             
             return File(audioStream, contentType, enableRangeProcessing: true);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return NotFound("Audio not found");
         }
@@ -234,6 +234,11 @@ public class MediaController : ControllerBase
         try
         {
             var redisConnectionString = _configuration.GetConnectionString("Redis");
+            if (string.IsNullOrWhiteSpace(redisConnectionString))
+            {
+                return Problem("Redis connection is not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             var server = _redisDatabase.Multiplexer.GetServer(redisConnectionString);
             var keys = server.Keys(pattern: "image_*").Take(20).ToList();
             
@@ -263,6 +268,11 @@ public class MediaController : ControllerBase
         try
         {
             var redisConnectionString = _configuration.GetConnectionString("Redis");
+            if (string.IsNullOrWhiteSpace(redisConnectionString))
+            {
+                return Problem("Redis connection is not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             var server = _redisDatabase.Multiplexer.GetServer(redisConnectionString);
             var keys = server.Keys(pattern: "image_*");
             var deletedCount = 0;
