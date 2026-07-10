@@ -7,6 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+    <None Remove="tests/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Storage.Blobs" Version="12.25.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.19" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.6" />

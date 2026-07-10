@@ -66,7 +66,13 @@ Azure Blob Storage variables are required for media upload/download endpoints. T
 
 ## Verification
 
-There is currently no automated test project in this repository. A local Release build succeeds, but it reports nullable-flow and unused-exception warnings. End-to-end catalogue, blob-storage, Redis-cache, and authorization behaviour still require tests against disposable dependencies before this service should be described as production-hardened.
+The test project uses mocks and disconnected dependencies, so CI does not need Azure, MongoDB, or Redis credentials:
+
+```bash
+dotnet test tests/Music.Tests/Music.Tests.csproj --configuration Release
+```
+
+The current suite covers playlist owner/admin decisions, MongoDB dependency failures, invalid media input, Blob Storage failures, and Redis-to-Blob fallback. End-to-end catalogue, Blob Storage, Redis-cache, and authorization behaviour still require tests against disposable dependencies before this service should be described as production-hardened.
 
 ## Selected endpoint groups
 
