@@ -16,13 +16,20 @@ public class MediaController : ControllerBase
     private readonly IMemoryCache _memoryCache;
     private readonly IDatabase _redisDatabase;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<MediaController> _logger;
 
-    public MediaController(IAzureBlobService blobService, IMemoryCache memoryCache, IDatabase redisDatabase, IConfiguration configuration)
+    public MediaController(
+        IAzureBlobService blobService,
+        IMemoryCache memoryCache,
+        IDatabase redisDatabase,
+        IConfiguration configuration,
+        ILogger<MediaController> logger)
     {
         _blobService = blobService;
         _memoryCache = memoryCache;
         _redisDatabase = redisDatabase;
         _configuration = configuration;
+        _logger = logger;
     }
 
     [HttpGet("image")]
@@ -232,19 +239,22 @@ public class MediaController : ControllerBase
             {
                 TotalImageKeys = keys.Count,
                 SampleKeys = keys.Select(k => k.ToString()).ToList(),
-                RedisInfo = await _redisDatabase.PingAsync(),
-                ConnectionString = redisConnectionString // Show what connection string is being used
+                RedisInfo = await _redisDatabase.PingAsync()
             };
 
             return Ok(cacheInfo);
         }
         catch (Exception ex)
         {
-            return Ok(new { Error = ex.Message, Status = "Redis connection failed" });
+            _logger.LogError(ex, "Unable to read Redis cache status");
+            return Problem(
+                title: "Redis cache unavailable",
+                detail: "The cache status could not be read.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
 
-    [HttpGet("cache/clear")]
+    [HttpPost("cache/clear")]
     public async Task<IActionResult> ClearCache()
     {
         try
@@ -264,7 +274,11 @@ public class MediaController : ControllerBase
         }
         catch (Exception ex)
         {
-            return Ok(new { Error = ex.Message });
+            _logger.LogError(ex, "Unable to clear Redis image cache");
+            return Problem(
+                title: "Redis cache unavailable",
+                detail: "The image cache could not be cleared.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
 
@@ -274,4 +288,4 @@ public class MediaController : ControllerBase
         Response.Headers["Access-Control-Allow-Origin"] = "*";
         return Ok(new { message = "Media controller is working", timestamp = DateTime.UtcNow });
     }
-} 
+}
