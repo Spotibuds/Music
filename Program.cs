@@ -83,7 +83,7 @@ builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
                 client.GetDatabase("admin").RunCommandAsync((Command<BsonDocument>)"{ping:1}").Wait(TimeSpan.FromSeconds(10)); // Reduced timeout
                 break;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 retryCount++;
 
@@ -99,7 +99,7 @@ builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
 
         return client;
     }
-    catch (Exception ex)
+    catch (Exception)
     {
         return null!;
     }
