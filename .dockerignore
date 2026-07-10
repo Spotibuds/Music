@@ -1,0 +1,15 @@
+.git
+.github
+bin
+obj
+.vs
+.vscode
+*.user
+*.suo
+*.pdb
+*.nupkg
+.env
+.env.*
+appsettings.Local.json
+docs
+README.md
