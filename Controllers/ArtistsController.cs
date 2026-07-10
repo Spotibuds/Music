@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using Music.Data;
@@ -123,6 +124,7 @@ public class ArtistsController : ControllerBase
         return Ok(artistDto);
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost]
     public async Task<ActionResult<ArtistDto>> CreateArtist(CreateArtistDto dto)
     {
@@ -152,6 +154,7 @@ public class ArtistsController : ControllerBase
         return CreatedAtAction(nameof(GetArtist), new { id = artist.Id }, artistDto);
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateArtist(string id, UpdateArtistDto dto)
     {
@@ -180,6 +183,7 @@ public class ArtistsController : ControllerBase
         return NoContent();
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("{id}/image")]
     public async Task<IActionResult> UploadArtistImage(string id, IFormFile image)
     {
@@ -332,6 +336,7 @@ public class ArtistsController : ControllerBase
         }
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteArtist(string id)
     {
@@ -371,4 +376,4 @@ public class UpdateArtistDto
 {
     public string? Name { get; set; }
     public string? Bio { get; set; }
-} 
+}

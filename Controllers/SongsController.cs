@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using Music.Data;
@@ -157,6 +158,7 @@ public class SongsController : ControllerBase
         return Ok(songDto);
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost]
     public async Task<ActionResult<SongDto>> CreateSong(CreateSongDto dto)
     {
@@ -198,6 +200,7 @@ public class SongsController : ControllerBase
         return CreatedAtAction(nameof(GetSong), new { id = song.Id }, songDto);
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("{id}/upload-file")]
     public async Task<IActionResult> UploadSongFile(string id, IFormFile audioFile)
     {
@@ -236,6 +239,7 @@ public class SongsController : ControllerBase
         }
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("{id}/upload-cover")]
     public async Task<IActionResult> UploadSongCover(string id, IFormFile imageFile)
     {
@@ -274,6 +278,7 @@ public class SongsController : ControllerBase
         }
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPost("{id}/upload-snippet")]
     public async Task<IActionResult> UploadSongSnippet(string id, IFormFile audioFile)
     {
@@ -312,6 +317,7 @@ public class SongsController : ControllerBase
         }
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateSong(string id, UpdateSongDto dto)
     {
@@ -361,6 +367,7 @@ public class SongsController : ControllerBase
         return NoContent();
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteSong(string id)
     {
@@ -419,4 +426,4 @@ public class UpdateSongDto
     public string? SnippetUrl { get; set; }
     public string? CoverUrl { get; set; }
     public DateTime? ReleaseDate { get; set; }
-} 
+}
