@@ -1,55 +1,66 @@
 # Spotibuds Music API
 
-The Music API is the ASP.NET Core service for music catalogue and playlist operations in Spotibuds. It exposes REST endpoints for songs, albums, artists, playlists, search, and media delivery.
+The Music API is the ASP.NET Core service for catalogue, playlist, search, and media features in Spotibuds. Spotibuds was a team project, and this repository covers one service within the wider application.
 
-## Responsibilities
+## Main functionality
 
-- Catalogue and playlist CRUD backed by MongoDB.
-- Audio, image, cover, and snippet delivery through Azure Blob Storage.
-- Two-level media caching: process-local `IMemoryCache`, followed by Redis with a six-hour media entry lifetime.
-- Swagger/OpenAPI and health endpoints for local and deployed diagnostics.
+- Song, album, artist, and playlist data stored in MongoDB.
+- Audio, images, covers, and snippets stored in Azure Blob Storage.
+- Image caching through `IMemoryCache` and Redis, with Blob Storage as the source of truth.
+- JWT validation using the token format issued by the Spotibuds Identity service.
+- Public catalogue, search, media, Swagger, and health routes.
+- Admin-only catalogue writes and cache operations.
+- Playlist changes limited to the playlist owner or an Admin.
 
-The deployed platform also contains separate Identity and User APIs. PostgreSQL and Entity Framework migrations belong to the Identity service; this service does not use PostgreSQL for catalogue storage.
+The Identity service uses PostgreSQL and Entity Framework Core. The Music API does not use PostgreSQL for its catalogue data.
 
-## Architecture
+## Stack
 
-See [`docs/architecture.md`](docs/architecture.md) for the request flow, dependencies, and current limitations.
+- .NET 8 and ASP.NET Core
+- MongoDB
+- Redis
+- Azure Blob Storage
+- Docker
+- xUnit
+
+See [`docs/architecture.md`](docs/architecture.md) for the request flow and service boundaries.
 
 ## Run locally
 
-Requirements: .NET 8 SDK, MongoDB, Redis, and an Azure Blob Storage account (or a test-compatible storage endpoint).
+You need the .NET 8 SDK, MongoDB, Redis, and an Azure Blob Storage account or compatible test endpoint.
 
-1. Restore and build:
+Restore and build:
 
-   ```bash
-   dotnet restore Music.csproj
-   dotnet build Music.csproj --configuration Release
-   ```
+```bash
+dotnet restore Music.csproj
+dotnet build Music.csproj --configuration Release
+```
 
-2. Supply configuration through environment variables. The double-underscore form is understood by ASP.NET Core configuration:
+Set the service configuration, then run the project:
 
-   ```bash
-   ConnectionStrings__MongoDb="mongodb://localhost:27017/spotibuds"
-   ConnectionStrings__Redis="localhost:6379"
-   Cors__AllowedOrigins="http://localhost:3000"
-   AzureStorage__ConnectionString="<redacted-storage-connection-string>"
-   AzureStorage__SongsContainer="songs"
-   AzureStorage__ArtistsContainer="artists"
-   AzureStorage__AlbumsContainer="albums"
-   AzureStorage__PlaylistsContainer="playlists"
-   dotnet run --project Music.csproj
-   ```
+```bash
+ConnectionStrings__MongoDb="mongodb://localhost:27017/spotibuds"
+ConnectionStrings__Redis="localhost:6379"
+Cors__AllowedOrigins="http://localhost:3000"
+AzureStorage__ConnectionString="<redacted-storage-connection-string>"
+AzureStorage__SongsContainer="songs"
+AzureStorage__ArtistsContainer="artists"
+AzureStorage__AlbumsContainer="albums"
+AzureStorage__PlaylistsContainer="playlists"
+Jwt__Secret="<same-signing-secret-used-by-Identity>"
+Jwt__Issuer="SpotibudsIdentity"
+Jwt__Audience="SpotibudsApp"
+dotnet run --project Music.csproj
+```
 
-   Never commit real connection strings, SAS tokens, publish profiles, or `.env` files. The checked-in appsettings files intentionally contain empty values.
+ASP.NET Core also accepts these settings from other configuration providers. Never commit connection strings, JWT secrets, SAS tokens, publish profiles, or `.env` files.
 
-3. Check the process and dependency health:
+Swagger is available at `/swagger`. Health checks are:
 
-   ```text
-   GET /health
-   GET /health/mongodb
-   ```
-
-Swagger is available at `/swagger` when the service is running.
+```text
+GET /health
+GET /health/mongodb
+```
 
 ## Docker
 
@@ -59,22 +70,21 @@ docker run --rm -p 8080:80 \
   -e ConnectionStrings__MongoDb="mongodb://host.docker.internal:27017/spotibuds" \
   -e ConnectionStrings__Redis="host.docker.internal:6379" \
   -e Cors__AllowedOrigins="http://localhost:3000" \
+  -e Jwt__Secret="<same-signing-secret-used-by-Identity>" \
   spotibuds-music-api
 ```
 
-Azure Blob Storage variables are required for media upload/download endpoints. The image does not contain application secrets.
+Azure Blob Storage settings are also required for media upload and download routes.
 
-## Verification
-
-The test project uses mocks and disconnected dependencies, so CI does not need Azure, MongoDB, or Redis credentials:
+## Tests
 
 ```bash
 dotnet test tests/Music.Tests/Music.Tests.csproj --configuration Release
 ```
 
-The current suite covers playlist owner/admin decisions, MongoDB dependency failures, invalid media input, Blob Storage failures, and Redis-to-Blob fallback. End-to-end catalogue, Blob Storage, Redis-cache, and authorization behaviour still require tests against disposable dependencies before this service should be described as production-hardened.
+The test project uses mocks, so it does not need Azure, MongoDB, or Redis credentials. It covers playlist owner/Admin decisions, MongoDB failures, invalid media input, Blob Storage errors, and Redis-to-Blob fallback.
 
-## Selected endpoint groups
+## Route groups
 
 | Area | Routes |
 | --- | --- |
@@ -83,16 +93,8 @@ The current suite covers playlist owner/admin decisions, MongoDB dependency fail
 | Media | `/api/media/image`, `/api/media/audio` |
 | Health | `/health`, `/health/mongodb` |
 
-## Security notes
+## Still to do
 
-Application secrets are supplied through runtime configuration and are not committed. Administrative write routes and operational cache routes also need explicit authentication and authorization before public deployment.
-
-## Authentication and route boundary
-
-The API validates the same JWT shape as the Spotibuds Identity service: `Jwt:Secret`, `Jwt:Issuer` (default `SpotibudsIdentity`), and `Jwt:Audience` (default `SpotibudsApp`). Secrets are supplied through runtime configuration such as `Jwt__Secret`; no second login or token format is introduced.
-
-- Public: catalogue reads, search, media reads, Swagger, `/health`, and `/health/mongodb`.
-- Admin role required: `/api/admin/**` and catalogue writes for songs, albums, and artists.
-- Authenticated owner or Admin role required: playlist creation, playlist updates/deletes, playlist song changes, playlist covers, and Redis cache status/clear operations.
-
-The public routes are intentionally read-only or operational health checks. Admin and owner checks prevent unauthenticated writes and prevent one user from modifying another user's playlist.
+- Add end-to-end tests with disposable MongoDB, Redis, and Blob Storage dependencies.
+- Finish the remaining nullable-flow warning fixes in Blob Storage and controller paths.
+- Improve monitoring for cache failures that currently fall back to Blob Storage.
