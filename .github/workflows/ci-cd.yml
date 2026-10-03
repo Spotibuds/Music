@@ -1,80 +1,49 @@
-name: CI/CD
-
+name: Music validation
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 permissions:
   contents: read
-
-env:
-  REGISTRY: spotibuds.azurecr.io
-  IMAGE_TAG: ${{ github.sha }}
-
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 20
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Restore dependencies
-      run: dotnet restore Music.csproj
-
-    - name: Build Music API
-      run: dotnet build Music.csproj --configuration Release --no-restore
-
-    - name: Run Music API tests
-      run: dotnet test tests/Music.Tests/Music.Tests.csproj --configuration Release
-
-    - name: Check vulnerable packages
-      run: dotnet list Music.csproj package --vulnerable --include-transitive
-
-    - name: Build Music API image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./
-        file: ./Dockerfile
-        load: true
-        tags: spotibuds-music-api:${{ env.IMAGE_TAG }}
-
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Log in to Azure Container Registry
-      uses: azure/docker-login@v2
-      with:
-        login-server: ${{ env.REGISTRY }}
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
-
-    - name: Build and push Music API
-      uses: docker/build-push-action@v5
-      with:
-        context: ./
-        file: ./Dockerfile
-        push: true
-        tags: ${{ env.REGISTRY }}/music-api:${{ env.IMAGE_TAG }}
-
-    - name: Deploy Music API to Azure Web App
-      uses: azure/webapps-deploy@v3
-      with:
-        app-name: music-spotibuds
-        publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_MUSIC }}
-        images: ${{ env.REGISTRY }}/music-api:${{ env.IMAGE_TAG }}
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+      - name: Start isolated regression dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$(openssl rand -base64 64 | tr -d '\n')"
+          echo "::add-mask::$key"
+          printf 'AZURITE_ACCOUNTS=musicregression:%s\n' "$key" > "$RUNNER_TEMP/music-test.env"
+          docker run -d --name music-test-mongo -p 127.0.0.1:27017:27017 mongo:8.0 --replSet tests --bind_ip_all
+          docker run -d --name music-test-azurite --env-file "$RUNNER_TEMP/music-test.env" -p 127.0.0.1:10000:10000 mcr.microsoft.com/azure-storage/azurite:3.35.0 azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --silent
+          for i in {1..30}; do
+            docker exec music-test-mongo mongosh --quiet --eval 'try { rs.status(); } catch(e) { rs.initiate({_id:"tests",members:[{_id:0,host:"127.0.0.1:27017"}]}); }' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          for i in {1..30}; do
+            docker exec music-test-mongo mongosh --quiet --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          printf 'MUSIC_TEST_MONGO=mongodb://127.0.0.1:27017/?directConnection=true\n' >> "$GITHUB_ENV"
+          printf 'MUSIC_TEST_STORAGE=DefaultEndpointsProtocol=http;AccountName=musicregression;AccountKey=%s;BlobEndpoint=http://127.0.0.1:10000/musicregression;\n' "$key" >> "$GITHUB_ENV"
+      - run: dotnet restore Music.sln --locked-mode
+      - run: dotnet build Music.sln --configuration Release --no-restore
+      - run: dotnet test Music.sln --configuration Release --no-build --logger trx
+      - name: Enforce current dependency advisories
+        shell: bash
+        run: |
+          dotnet list Music.sln package --vulnerable --include-transitive --no-restore --format json > advisories.json
+          python3 scripts/check-advisories.py --self-test
+          python3 scripts/check-advisories.py advisories.json Music.csproj Music.Tests.csproj
+      - run: docker build -t spotibuds-music-check .
+      - name: Remove only regression containers
+        if: always()
+        run: docker rm -fv music-test-mongo music-test-azurite || true

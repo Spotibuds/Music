@@ -5,6 +5,11 @@ namespace Music.Models;
 
 public class Playlist
 {
+    [BsonElement("version")]
+    public long Version { get; set; }
+
+    [BsonElement("isPublic")]
+    public bool IsPublic { get; set; } = true;
     [BsonId]
     [BsonRepresentation(BsonType.ObjectId)]
     public string Id { get; set; } = ObjectId.GenerateNewId().ToString();
@@ -29,4 +34,4 @@ public class Playlist
 
     [BsonElement("updatedAt")]
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
-} 
+}

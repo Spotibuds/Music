@@ -1,0 +1,604 @@
+{
+  "schemaVersion": 1,
+  "repository": "Music",
+  "sourceAudit": "2026-10-03 spotibuds-audit (original evidence preserved)",
+  "updated": "2026-10-03",
+  "verification": {
+    "build": "Release Music.sln 0 warnings, 0 errors",
+    "tests": {
+      "passed": 21,
+      "failed": 0,
+      "skipped": 0,
+      "command": "dotnet test Music/tests/Music.Tests/Music.Tests.csproj --no-restore -c Release --logger 'trx;LogFileName=music-regressions.trx' --results-directory Music/docs/test-results",
+      "evidence": "docs/test-results/music-regressions.trx",
+      "dependencies": "Latest full suite21/21 including multipart clear/omit validation and credentialed CORS; isolated authenticated MongoDB demo-rs and fresh Azurite; generated test databases/containers cleaned"
+    },
+    "dependencies": "Live NuGet advisory scan: both Music projects, zero known vulnerable packages",
+    "browser": "Root final documented Test.ps1 -Browser -BuildImages run8951 completed exit0 on2026-10-03: all21 Chromium workflows passed with0skips/0flaky cases, including playback/seek, catalogue/admin edits and playlists. Music's persisted HTTP suite passed21/21 separately; browser evidence is owned by the root demo workflow.",
+    "docker": "Root final all-four application Docker builds passed; actual Config.User Music/Identity/User1654 and Frontendnextjs; all9 exposed mappings loopback; allAPI readiness succeeded. Production cloud/proxy/TLS hardening remains separate."
+  },
+  "entries": [
+    {
+      "id": "M-01",
+      "title": "Normal catalogue PUT writes an unknown field that makes the document unreadable",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-01 retained; current production routes/services and regression assertions described below.",
+      "correction": "Shared command implementations contain no synthetic update fields. Startup and the restricted repair route remove only the historical placeholder field.",
+      "changedFiles": [
+        "Controllers/ArtistsController.cs",
+        "Controllers/AlbumsController.cs",
+        "Controllers/SongsController.cs",
+        "Services/CatalogueService.cs",
+        "Services/MediaCommands.cs"
+      ],
+      "regressionTests": [
+        "CatalogueCommandsAuthorizePersistRenameRelationshipsRepairAndDeleteThroughEveryRoute"
+      ],
+      "verification": "PUT all three entities then read/search and inspect raw BSON; deliberately insert placeholder into three test collections, repair3, subsequent GET succeeds.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-02",
+      "title": "Anonymous media proxy exposes arbitrary private blobs in the configured account",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-02 retained; current production routes/services and regression assertions described below.",
+      "correction": "Proxy accepts configured account identities/allowed containers and requires a current permitted catalogue reference; private playlist covers enforce visibility.",
+      "changedFiles": [
+        "Services/AzureBlobService.cs",
+        "Services/MediaCommands.cs",
+        "Controllers/MediaController.cs"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Foreign-host/private-container attempt400; valid catalogue bytes and PNG MIME verified. No whole-container public access changes.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-03",
+      "title": "Public search allows regex failures and unbounded expensive matching",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-03 retained; current production routes/services and regression assertions described below.",
+      "correction": "Literal escaped bounded Mongo search, database limits/MaxTime, cancellation, and60/minute/IP rate limit.",
+      "changedFiles": [
+        "Services/CatalogueService.cs",
+        "Controllers/SearchController.cs",
+        "Program.cs"
+      ],
+      "regressionTests": [
+        "CatalogueCommandsAuthorizePersistRenameRelationshipsRepairAndDeleteThroughEveryRoute"
+      ],
+      "verification": "Search '[' succeeds as a literal empty result; renamed artist still locates song by immutable ID. Query result limits and request rate limiter wired in production.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-04",
+      "title": "Playlist and album ordering is not persisted consistently and duplicate adds race",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-04 retained; current production routes/services and regression assertions described below.",
+      "correction": "Versioned playlist replacement preserves unique contiguous positions; shared command gate and Mongo transactions protect album ordering/relationships.",
+      "changedFiles": [
+        "Services/PlaylistService.cs",
+        "Services/CatalogueService.cs",
+        "Models/Playlist.cs",
+        "Models/Song.cs"
+      ],
+      "regressionTests": [
+        "PlaylistsPersistContiguousOrderAtomicUniquenessPrivacyAndOwnerPermissions"
+      ],
+      "verification": "Six simultaneous same-song adds persist exactly one reference and return one200/five409; reorder/removal persisted IDs/positions asserted; song deletion reindexes transactionally.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-05",
+      "title": "Duplicate CRUD routes apply incompatible relationship and deletion rules",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-05 retained; current production routes/services and regression assertions described below.",
+      "correction": "All basic/admin routes call the same services. Album.Artist/Song.Album/Artists IDs canonical; presentation inverse relationships derived; guarded artist/album delete and transactional song/playlist cleanup.",
+      "changedFiles": [
+        "Controllers/AdminController.cs",
+        "Controllers/ArtistsController.cs",
+        "Controllers/AlbumsController.cs",
+        "Controllers/SongsController.cs",
+        "Services/CatalogueService.cs"
+      ],
+      "regressionTests": [
+        "CatalogueCommandsAuthorizePersistRenameRelationshipsRepairAndDeleteThroughEveryRoute",
+        "PlaylistsPersistContiguousOrderAtomicUniquenessPrivacyAndOwnerPermissions"
+      ],
+      "verification": "Both deletion route families409 while referenced; song deletion removes canonical album song and every playlist reference. Basic JSON mutations cannot bypass file/reference validation.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-06",
+      "title": "Media replacement deletes the working file before the replacement succeeds",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-06 retained; current production routes/services and regression assertions described below.",
+      "correction": "Durable cleanup intent before upload, upload every replacement before publishing metadata, then exact old-object cleanup only if unreferenced.",
+      "changedFiles": [
+        "Services/MediaCommands.cs",
+        "Services/CatalogueService.cs",
+        "Services/PlaylistService.cs"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Actual unavailable storage host503 preserves prior document and byte hash. Valid new audio followed by invalid new cover400 preserves prior audio and title; cleanup retains referenced old media.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-07",
+      "title": "Audio range parsing mishandles valid byte-zero and suffix ranges",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-07 retained; current production routes/services and regression assertions described below.",
+      "correction": "Strict single-byte-range parser and Azure ranged streaming with exact length/range headers, suffix/open-ended support,416.",
+      "changedFiles": [
+        "Controllers/MediaController.cs"
+      ],
+      "regressionTests": [
+        "ExactByteRanges",
+        "InvalidRangesAreRejected",
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "HTTP0-0 onebyte, suffix3 finalbytes, open-ended and selectedrange byte comparisons; unsatisfiable416 bytes */length asserted.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-08",
+      "title": "32-bit randomized URL hashes allow cache collisions and replica inconsistency",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-08 retained; current production routes/services and regression assertions described below.",
+      "correction": "Removed both cache tiers and URL hash keys. Uses native Blob ETag/content identity and HTTP mandatory revalidation.",
+      "changedFiles": [
+        "Controllers/MediaController.cs",
+        "Program.cs",
+        "Music.csproj"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Full/ranged exact bytes independent of URL hash; no GetHashCode keys/ETags or cache collision code remains.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-09",
+      "title": "Redis fallback cannot handle Redis unavailable before controller construction",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-09 retained; current production routes/services and regression assertions described below.",
+      "correction": "Redis no longer participates in Music dependency injection or media delivery. Blob streams remain available with cold Redis.",
+      "changedFiles": [
+        "Program.cs",
+        "Controllers/MediaController.cs",
+        "Music.csproj"
+      ],
+      "regressionTests": [
+        "RealMiddlewareBootsDuringColdMongoAndReturnsBounded503",
+        "external demo outage integration"
+      ],
+      "verification": "Root outage script stopped Redis and restarted Music; full media SHA and0-0/suffix/open/416 checks passed. Redis not a required Music dependency.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-10",
+      "title": "Cache administration does not invalidate memory and may reject connection strings",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-10 retained; current production routes/services and regression assertions described below.",
+      "correction": "Cache status/clear administrator-only report disabled accurately. Metadata-reference checks deny deleted media immediately; no memory/Redis tier to retain stale bytes.",
+      "changedFiles": [
+        "Controllers/MediaController.cs",
+        "Services/MediaCommands.cs"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Read valid cover, deletecover, formerURL404 immediately before physical cleanup. Current referenced audio survives cleanup.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-11",
+      "title": "Public playlist listing is unbounded and performs serial per-song database queries",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-11 retained; current production routes/services and regression assertions described below.",
+      "correction": "Validated positive1..100 paging, deterministic sort, max skip10000; playlists summaries first20 songs plus full songCount, detail at most500; batched song hydration.",
+      "changedFiles": [
+        "Services/PlaylistService.cs",
+        "Services/CatalogueService.cs",
+        "Services/DemoRules.cs"
+      ],
+      "regressionTests": [
+        "CatalogueCommandsAuthorizePersistRenameRelationshipsRepairAndDeleteThroughEveryRoute",
+        "PlaylistsPersistContiguousOrderAtomicUniquenessPrivacyAndOwnerPermissions"
+      ],
+      "verification": "limit0/negative/101/skipnegative400; pagination lives in wired controllers. All page playlist songs resolved in one bounded $in query.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-12",
+      "title": "Active catalogue DTOs accept invalid metadata and route IDs become500",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-12 retained; current production routes/services and regression assertions described below.",
+      "correction": "Validation applies inside wired services to route ObjectIds, required bounded text, duration1..7200, real references, media identities and positions.",
+      "changedFiles": [
+        "Controllers/Contracts.cs",
+        "Services/DemoRules.cs",
+        "Services/CatalogueService.cs",
+        "Services/PlaylistService.cs"
+      ],
+      "regressionTests": [
+        "CatalogueCommandsAuthorizePersistRenameRelationshipsRepairAndDeleteThroughEveryRoute"
+      ],
+      "verification": "Malformed ID400; invalid title/duration/foreignmedia/fabricatedartist400, persisted valid state remains readable. Ordinary admin writes403 and anonymous401.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-13",
+      "title": "Artist rename and name-based joins disconnect valid albums",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-13 retained; current production routes/services and regression assertions described below.",
+      "correction": "Stable IDs for relationships and ID-based discovery, batched presentation hydration after renames.",
+      "changedFiles": [
+        "Services/CatalogueService.cs"
+      ],
+      "regressionTests": [
+        "CatalogueCommandsAuthorizePersistRenameRelationshipsRepairAndDeleteThroughEveryRoute"
+      ],
+      "verification": "Artist and album renames retain album lookup and refreshed song artist/album names; literal artist-name search finds canonical song.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-14",
+      "title": "Persisted SAS URLs eventually expire without a renewal mechanism",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-14 retained; current production routes/services and regression assertions described below.",
+      "correction": "Stable application media URLs are persisted without expiring credentials. Read-time metadata visibility is authoritative. Permitted legacy account URLs normalize idempotently.",
+      "changedFiles": [
+        "Services/AzureBlobService.cs",
+        "Services/MediaCommands.cs",
+        "Controllers/MediaController.cs"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Persisted/upload response URL has no query/SAS and no internal azurite hostname; valid media uses stable identity with immediate deletion/visibility enforcement.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-15",
+      "title": "Missing Azure configuration reports successful playlist cover upload without storing the file",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-15 retained; current production routes/services and regression assertions described below.",
+      "correction": "Storage configuration eagerly validated; missing configuration fails clearly and runtime storage failure503 cannot publish fabricated metadata.",
+      "changedFiles": [
+        "Services/AzureBlobService.cs",
+        "Program.cs"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Real inaccessible Blob endpoint503 and unchanged previous metadata/bytes; placeholder/fake-success code removed.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-16",
+      "title": "Blank checked-in container settings defeat advertised defaults",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-16 retained; current production routes/services and regression assertions described below.",
+      "correction": "Blank container values resolve documented defaults; invalid container names reject configuration.",
+      "changedFiles": [
+        "Services/AzureBlobService.cs",
+        "appsettings.json"
+      ],
+      "regressionTests": [
+        "Release build and persisted HTTP upload boot"
+      ],
+      "verification": "Test host custom generated valid containers upload/read; deployed defaults songs/artists/albums/playlists work through root seed. Configuration validated without network gating.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-17",
+      "title": "Wildcard response middleware defeats configured cross-origin allowlist",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-17 retained; current production routes/services and regression assertions described below.",
+      "correction": "Single exact CORS policy and exposed range/ETag headers; manual wildcard middleware removed.",
+      "changedFiles": [
+        "Program.cs",
+        "Controllers/MediaController.cs"
+      ],
+      "regressionTests": [
+        "CorsHasExactAllowlistOnActualAndPreflightRequests"
+      ],
+      "verification": "Allowed actual and preflight responses use exact127.0.0.1 frontend origin and credentials:true; unapproved actual and preflight have neither header.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-18",
+      "title": "Mongo outage handling can discard the client and synchronously pings each request",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-18 retained; current production routes/services and regression assertions described below.",
+      "correction": "Reusable nonnull Mongo client and context without constructor pings, bounded driver timeouts and dependency failures503; clients reconnect.",
+      "changedFiles": [
+        "Data/MongoDbContext.cs",
+        "Program.cs"
+      ],
+      "regressionTests": [
+        "RealMiddlewareBootsDuringColdMongoAndReturnsBounded503"
+      ],
+      "verification": "Real HTTP host boots with unavailableMongo; /api/songs503 under10seconds, live200,ready503; original null-factory/synchronousping paths gone.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-19",
+      "title": "Health can report healthy while dependent routes fail and some diagnostics disclose details",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-19 retained; current production routes/services and regression assertions described below.",
+      "correction": "Separated lightweight live and dependency-aware ready including completed index/migration initialization; sanitized errors, diagnostics removed.",
+      "changedFiles": [
+        "Program.cs",
+        "Services/MediaCommands.cs"
+      ],
+      "regressionTests": [
+        "RealMiddlewareBootsDuringColdMongoAndReturnsBounded503"
+      ],
+      "verification": "Dependency failure responses omit endpoint details; live200 and ready503 verified during cold Mongo. Root actual Azurite stop ready503/live200.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-20",
+      "title": "Passing unit tests exercise a separate helper and do not cover production failure paths",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-20 retained; current production routes/services and regression assertions described below.",
+      "correction": "Tests exercise real JWT/auth/session/CORS middleware with actual persisted Mongo/Blob state. Production PlaylistService uses PlaylistAccessPolicy. Tests included Music.sln and validation-onlyCI.",
+      "changedFiles": [
+        "tests/Music.Tests/DemoFactory.cs",
+        "tests/Music.Tests/PersistedHttpTests.cs",
+        "tests/Music.Tests/DependencyFailureTests.cs",
+        "Music.sln",
+        ".github/workflows/ci-cd.yml"
+      ],
+      "regressionTests": [
+        "All20 Music tests"
+      ],
+      "verification": "Final Release suite20passed/0failed/0skipped, including persisted authorization/ordering/media/bulk invariants; solutionbuild0warnings0errors.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-21",
+      "title": "Playlist uploads log a bearer SAS URL",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-21 retained; current production routes/services and regression assertions described below.",
+      "correction": "No SAS URLs generated or logged; only stable blob identities/native ETags. Sanitized logging emits exception type, no request body/token/signed URL.",
+      "changedFiles": [
+        "Services/AzureBlobService.cs",
+        "Controllers/PlaylistsController.cs",
+        "Program.cs"
+      ],
+      "regressionTests": [
+        "Source logging scan and stable media URL regression"
+      ],
+      "verification": "All old signed-URL console statements removed. HTTP response metadata URLs contain no SAS query; tests/results omit credentials.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "M-22",
+      "title": "Bulk song upload silently ignores count mismatches and undercounts errors",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit M-22 retained; current production routes/services and regression assertions described below.",
+      "correction": "Validate all metadata/file counts up front; complete indexed per-item outcomes and errors; durable fingerprint/idempotency keys and deterministic IDs prevent retry duplicates; canonical album association written in same transaction.",
+      "changedFiles": [
+        "Controllers/AdminController.cs",
+        "Controllers/Contracts.cs",
+        "Services/CatalogueService.cs"
+      ],
+      "regressionTests": [
+        "BulkRejectsMismatchesAndReportsEveryFailedRowWithoutPartialMetadata"
+      ],
+      "verification": "Count mismatch400; onevalid/oneinvalid yields exactly1success/1error/2items and one persistedrow. Samekeyretry keeps same ID/one row; changedpayloadkey409.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "MR-01",
+      "title": "Uploads",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit MR-01 retained; current production routes/services and regression assertions described below.",
+      "correction": "Decode image bytes with bounded Skia dimensions/types; validate entire PCM WAV structure, full bounded ffmpeg decode for MP3/FLAC/Ogg; file size/types preserved, streams disposed.",
+      "changedFiles": [
+        "Services/AzureBlobService.cs",
+        "Services/MediaCommands.cs",
+        "Program.cs",
+        "Dockerfile"
+      ],
+      "regressionTests": [
+        "WaveParserChecksEntirePayloadAndDuration",
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Misleading.jpg with PNGcontent served image/png; bogus image/audio400. TruncatedWAV rejected; malformedcover after staging validnewaudio preserves prior metadata.",
+      "status": "Fixed and verified",
+      "limitations": "PCM WAV/PNG decoded and persisted in tests; compressed-format fixtures are not in xUnit suite."
+    },
+    {
+      "id": "MR-02",
+      "title": "Indexes/concurrency",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit MR-02 retained; current production routes/services and regression assertions described below.",
+      "correction": "Versioned/indexed Music data and single-instance mutation gate. Unique artist name and artist/album constraints; canonical relationship/playlist owner indexes initialized idempotently.",
+      "changedFiles": [
+        "Services/MediaCommands.cs",
+        "Services/CatalogueService.cs",
+        "Services/PlaylistService.cs"
+      ],
+      "regressionTests": [
+        "CatalogueCommandsAuthorizePersistRenameRelationshipsRepairAndDeleteThroughEveryRoute",
+        "PlaylistsPersistContiguousOrderAtomicUniquenessPrivacyAndOwnerPermissions"
+      ],
+      "verification": "Concurrent casevariant duplicate artists409; six-way song add exactly one reference. Maintenance completes indexes before ready.",
+      "status": "Fixed and verified",
+      "limitations": "Single Music instance required; multiple replicas need distributed locking/transaction-only command redesign."
+    },
+    {
+      "id": "MR-03",
+      "title": "Caching memory/background work",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit MR-03 retained; current production routes/services and regression assertions described below.",
+      "correction": "Removed media caching/background Task.Run writes and transient whole-blob downloads. Streams bounded Blob content directly; only bounded validation allocations and cancellable observed cleanup worker remain.",
+      "changedFiles": [
+        "Controllers/MediaController.cs",
+        "Services/AzureBlobService.cs",
+        "Services/MediaCommands.cs"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Exact streaming tests; no memory/Redis allocation tier, untrackedTask.Run, or cache-write task remains. Upload memory bounded10/50MiB.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "MR-04",
+      "title": "Blob public access",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit MR-04 retained; current production routes/services and regression assertions described below.",
+      "correction": "Removed unused public-container access helper; uploads explicitly private containers, catalogue proxy enforces references.",
+      "changedFiles": [
+        "Services/AzureBlobService.cs"
+      ],
+      "regressionTests": [
+        "Persisted upload path and source inspection"
+      ],
+      "verification": "No PublicAccessType.Blob or SetAccessPolicy public utility remains. Azure/Azurite media bytes served through restricted application identities.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "MR-05",
+      "title": "Hosting/configuration",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit MR-05 retained; current production routes/services and regression assertions described below.",
+      "correction": "Configurable Kestrel URLs/ports, local loopback compose exposure, .NET10 nonroot8080 image. Demo uses localHTTP; no unsupported production proxy/TLS claims.",
+      "changedFiles": [
+        "Program.cs",
+        "Dockerfile",
+        ".dockerignore",
+        "README.md"
+      ],
+      "regressionTests": [
+        "Release build and 21 persisted regressions",
+        "Root final Docker build and nonroot/loopback/container-content inspection"
+      ],
+      "verification": "Root final docker compose build passed for all four application images and all APIs became ready. Actual docker inspect Config.User: Music/Identity/User1654; Frontendnextjs. Music listens on8080 internally; all9 published compose mappings bind127.0.0.1. Root docker exec confirmed Frontend runtime contains no /app/demo/.env.localdemo, account credentials, fixture assets or .git. Music Release21tests passed with0warnings/0skips.",
+      "status": "Fixed and verified",
+      "limitations": "Local single-instance HTTP demo verified. Production reverse-proxy/forwarded-header/TLS configuration, cloud policy, immutable-image hardening, backups and observability require separate production validation."
+    },
+    {
+      "id": "MR-06",
+      "title": "Documentation",
+      "applicability": "Confirmed against initial code and original audit; implemented local demo correction.",
+      "evidence": "Original audit MR-06 retained; current production routes/services and regression assertions described below.",
+      "correction": "README rewritten around actual single-instance transactions/privateBlob/stablemedia/lazy reconnection/liveness/readiness/config/commands/testing. Removed misleading warning inventory and inactive service claims.",
+      "changedFiles": [
+        "README.md",
+        ".env.example",
+        "docs/remediation.json"
+      ],
+      "regressionTests": [
+        "Release build/test/advisory results"
+      ],
+      "verification": "Release solutionbuild0warnings; latest21tests passed;NuGet knownvulnerabilities0. Root demo guide authoritative for verified orchestration.",
+      "status": "Fixed and verified",
+      "limitations": "Complete orchestration/browser walkthrough reported by root ledger."
+    },
+    {
+      "id": "NEW-M01",
+      "title": "Azure retry aggregate dependency status",
+      "applicability": "Encountered during actual Azure retry exhaustion while the isolated local Azurite dependency was unavailable.",
+      "evidence": "A cover replacement during the local Azurite outage returned500 because Azure SDK retries raised an AggregateException containing transport dependency errors. The outage reproduction identified the missing classification; current persisted endpoint-failure regression asserts503 and prior bytes/metadata.",
+      "correction": "Azure SDK aggregates retry transport failures; classify recursively only known dependency inners, returning503 and preserving previous media.",
+      "changedFiles": [
+        "Services/DemoRules.cs",
+        "Program.cs",
+        "Controllers/AdminController.cs"
+      ],
+      "regressionTests": [
+        "MediaIsByteAccuratePrivateMimeCorrectAndReplacementFailurePreservesWorkingObject"
+      ],
+      "verification": "Unavailable real Blob endpoint503, persisted previous URL/title and exact oldbytes unchanged.",
+      "status": "Fixed and verified",
+      "limitations": "No reachable defect intentionally deferred."
+    },
+    {
+      "id": "NEW-M02",
+      "title": "Supplied-session public reads hid Identity outages as anonymous empty lists",
+      "applicability": "Found during actual PostgreSQL outage after initial remediation",
+      "evidence": "Private owner playlist listing could fall back to anonymous200 when supplied JWT session validation failed.",
+      "correction": "Reject a supplied revoked/invalid bearer401 and unavailable Identity validation503 before public reads.",
+      "changedFiles": [
+        "Program.cs",
+        "tests/Music.Tests/PersistedHttpTests.cs",
+        "tests/Music.Tests/DependencyFailureTests.cs"
+      ],
+      "regressionTests": [
+        "PlaylistsPersistContiguousOrderAtomicUniquenessPrivacyAndOwnerPermissions",
+        "RealJwtMiddlewareRejectsAnonymousForeignRoleRevokedAndUnavailableSessions"
+      ],
+      "verification": "Final documented Test.ps1 -Browser -BuildImages run8951 completed exit0 on2026-10-03; Music persisted HTTP suite21/21 passed with0skips. The private-owner listing regression asserts503 on session dependency failure, unchanged playlist count, restored access to the existing private list and401 for a revoked supplied bearer. Root's final40 live Identity checks also passed across the persisted service boundaries.",
+      "status": "Fixed and verified",
+      "limitations": "Identity dependency failure intentionally returns503. Production availability/load validation and distributed coordination remain separate from this isolated single-instance demo."
+    },
+    {
+      "id": "NEW-M03",
+      "title": "Credentialed frontend requests needed explicit CORS credentials permission",
+      "applicability": "Actual browser request used credentials:include against exact-origin Music CORS",
+      "evidence": "Browser catalogue/playlists blocked despite healthy APIs because allow-credentials was missing.",
+      "correction": "Add AllowCredentials to the existing exact-origin policy; preserve rejection of unapproved origins.",
+      "changedFiles": [
+        "Program.cs",
+        "tests/Music.Tests/DependencyFailureTests.cs"
+      ],
+      "regressionTests": [
+        "CorsHasExactAllowlistOnActualAndPreflightRequests"
+      ],
+      "verification": "Actual HTTP GET/preflight regression verifies the exact allowed origin with credentials:true and no CORS headers for an attacker origin. Final documented run8951 passed all21 Music regressions and all21 rebuilt-image Chromium workflows with0skips/0flaky cases; catalogue and playlist browser requests succeeded against the loopback services.",
+      "status": "Fixed and verified",
+      "limitations": "The configured loopback origin and Chromium workflows are verified. Production TLS/reverse-proxy configuration and a broader browser matrix require separate validation."
+    },
+    {
+      "id": "NEW-M04",
+      "title": "Multipart optional field clearing could report success while preserving stale text",
+      "applicability": "Encountered during actual admin UI artist edit; the same form-binding behavior also affected song Genre and optional AlbumId.",
+      "evidence": "The browser submitted Bio empty, the route returned200, and a subsequent artist GET retained its previous biography. Default MVC form binding had converted empty input to null before the shared patch command.",
+      "correction": "Preserve explicit empty values through per-field form metadata. Bio/Genre clear, omitted fields preserve, empty AlbumId detaches and reindexes, and supplied blank required fields fail400 with prior state intact.",
+      "changedFiles": [
+        "Controllers/Contracts.cs",
+        "tests/Music.Tests/PersistedHttpTests.cs",
+        "README.md"
+      ],
+      "regressionTests": [
+        "MultipartEditsClearExplicitOptionalTextPreserveOmittedFieldsAndRejectRequiredBlanks"
+      ],
+      "verification": "Actual JWT/admin multipart requests assert persisted artist biography/name and song genre/album, former album projection, rejected-field no-mutation and unchanged exact prior WAV bytes. Final documented run8951 passed the Release Music suite21/21 with0warnings/0skips, all four application Docker builds and all21 rebuilt-image Chromium workflows with0skips/0flaky cases, including the admin artist biography clear/readback regression.",
+      "status": "Fixed and verified",
+      "limitations": "Verified for the isolated single-instance local demo. Production catalogue load and broader browser certification were not executed."
+    }
+  ]
+}

@@ -1,319 +1,133 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 using MongoDB.Driver;
-using MongoDB.Bson;
 using Music.Data;
 using Music.Services;
-using StackExchange.Redis;
-using Microsoft.IdentityModel.Tokens;
+using System.Net;
 using System.Text;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
-
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-
-var jwtSecret = builder.Configuration["Jwt:Secret"];
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SpotibudsIdentity";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "SpotibudsApp";
-
-if (string.IsNullOrWhiteSpace(jwtSecret))
+builder.Logging.ClearProviders().AddSimpleConsole(options => options.SingleLine = true);
+string Required(string name) => !string.IsNullOrWhiteSpace(builder.Configuration[name]) ? builder.Configuration[name]! : throw new InvalidOperationException($"{name} is required.");
+var secret = Required("Jwt:Secret");
+if (Encoding.UTF8.GetByteCount(secret) < 32) throw new InvalidOperationException("Jwt:Secret requires at least 32 random bytes.");
+var mongoSettings = MongoClientSettings.FromConnectionString(Required("ConnectionStrings:MongoDb"));
+mongoSettings.ServerSelectionTimeout = TimeSpan.FromSeconds(2);
+mongoSettings.ConnectTimeout = TimeSpan.FromSeconds(2);
+mongoSettings.SocketTimeout = TimeSpan.FromSeconds(5);
+mongoSettings.MaxConnectionPoolSize = 50;
+mongoSettings.RetryWrites = false;
+builder.Services.AddSingleton<IMongoClient>(new MongoClient(mongoSettings));
+builder.Services.AddSingleton<MongoDbContext>();
+builder.Services.AddSingleton<MutationGate>();
+builder.Services.AddSingleton<AzureBlobService>();
+builder.Services.AddScoped<MediaCommands>();
+builder.Services.AddScoped<CatalogueService>();
+builder.Services.AddScoped<PlaylistService>();
+builder.Services.AddSingleton<MaintenanceState>();
+builder.Services.AddHostedService<MaintenanceWorker>();
+builder.Services.AddHttpClient("identity", client =>
 {
-    throw new InvalidOperationException("Jwt:Secret is required and must be supplied by runtime configuration.");
-}
-
-builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+    client.BaseAddress = new Uri(Required("IdentityService:BaseUrl").TrimEnd('/') + "/");
+    client.DefaultRequestHeaders.Add("X-Spotibuds-Service", Required("ServiceAuth:Secret"));
+    client.Timeout = TimeSpan.FromSeconds(2);
+});
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
     {
-        options.TokenValidationParameters = new TokenValidationParameters
+        ValidateIssuer = true, ValidIssuer = Required("Jwt:Issuer"), ValidateAudience = true, ValidAudience = Required("Jwt:Audience"),
+        ValidateLifetime = true, ValidateIssuerSigningKey = true, IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret)), ClockSkew = TimeSpan.FromSeconds(5)
+    };
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = async context =>
         {
-            ValidateIssuer = true,
-            ValidIssuer = jwtIssuer,
-            ValidateAudience = true,
-            ValidAudience = jwtAudience,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-            ClockSkew = TimeSpan.FromMinutes(1)
-        };
-    });
-
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"));
-});
-
-var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
-    ?? Environment.GetEnvironmentVariable("ConnectionStrings__Redis");
-
-if (string.IsNullOrEmpty(redisConnectionString))
-{
-    throw new InvalidOperationException("Redis connection string not found");
-}
-
-builder.Services.AddSingleton<IConnectionMultiplexer>(provider =>
-{
-    return ConnectionMultiplexer.Connect(redisConnectionString);
-});
-
-builder.Services.AddSingleton<IDatabase>(provider =>
-{
-    var connection = provider.GetRequiredService<IConnectionMultiplexer>();
-    return connection.GetDatabase();
-});
-
-builder.Services.AddMemoryCache(options =>
-{
-    options.SizeLimit = 50 * 1024 * 1024;
-});
-
-builder.Services.AddSingleton<IMongoClient>(serviceProvider =>
-{
-    var connectionString = builder.Configuration.GetConnectionString("MongoDb")
-    ?? Environment.GetEnvironmentVariable("ConnectionStrings__MongoDb");
-
-    if (!string.IsNullOrEmpty(connectionString) && connectionString.Contains("authMechanism=DEFAULT"))
-    {
-        connectionString = connectionString.Replace("authMechanism=DEFAULT", "authMechanism=SCRAM-SHA-1");
-    }
-
-    if (string.IsNullOrEmpty(connectionString))
-    {
-        return null!;
-    }
-
-    try
-    {
-        var settings = MongoClientSettings.FromConnectionString(connectionString);
-
-        // Improved connection settings for better reliability
-        settings.ServerSelectionTimeout = TimeSpan.FromSeconds(30); // Reduced from 60 to fail faster
-        settings.ConnectTimeout = TimeSpan.FromSeconds(30); // Reduced from 60 to fail faster
-        settings.SocketTimeout = TimeSpan.FromSeconds(30); // Reduced from 60 to fail faster
-        settings.MaxConnectionPoolSize = 50;
-        settings.MinConnectionPoolSize = 10;
-        settings.MaxConnectionIdleTime = TimeSpan.FromMinutes(5);
-        settings.MaxConnectionLifeTime = TimeSpan.FromMinutes(15);
-        settings.HeartbeatInterval = TimeSpan.FromSeconds(10);
-        settings.HeartbeatTimeout = TimeSpan.FromSeconds(10);
-        settings.RetryWrites = true;
-        settings.RetryReads = true;
-
-
-
-
-
-        var client = new MongoClient(settings);
-
-        // Test the connection with retry logic
-        var maxRetries = 2; // Reduced from 3 to fail faster
-        var retryCount = 0;
-
-        while (retryCount < maxRetries)
-        {
+            var sid = context.Principal?.FindFirst("sid")?.Value;
+            if (!Guid.TryParse(sid, out _)) { context.Fail("Session identity is required."); return; }
             try
             {
-                client.GetDatabase("admin").RunCommandAsync((Command<BsonDocument>)"{ping:1}").Wait(TimeSpan.FromSeconds(10)); // Reduced timeout
-                break;
+                var client = context.HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>().CreateClient("identity");
+                using var response = await client.GetAsync($"api/auth/internal/sessions/{sid}", context.HttpContext.RequestAborted);
+                if (response.StatusCode == HttpStatusCode.Unauthorized) context.Fail("Session is revoked.");
+                else if (response.StatusCode != HttpStatusCode.NoContent) { context.HttpContext.Items["identityUnavailable"] = true; context.Fail("Session validation unavailable."); }
             }
-            catch (Exception)
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { context.HttpContext.Items["identityUnavailable"] = true; context.Fail("Session validation unavailable."); }
+        },
+        OnChallenge = context =>
+        {
+            if (context.HttpContext.Items.ContainsKey("identityUnavailable"))
             {
-                retryCount++;
-
-                if (retryCount >= maxRetries)
-                {
-                    return null!;
-                }
-
-                // Wait before retrying
-                Thread.Sleep(1000); // Reduced wait time
+                context.HandleResponse(); context.Response.StatusCode = 503;
+                return context.Response.WriteAsJsonAsync(new { message = "Session validation is temporarily unavailable." });
             }
+            return Task.CompletedTask;
         }
-
-        return client;
-    }
-    catch (Exception)
-    {
-        return null!;
-    }
+    };
 });
-
-builder.Services.AddScoped<MongoDbContext>(serviceProvider =>
+builder.Services.AddAuthorization(options => options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin")));
+builder.Services.AddControllers();
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = 150 * 1024 * 1024);
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 150 * 1024 * 1024);
+var origins = Required("Cors:AllowedOrigins").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+if (origins.Any(x => x == "*" || !Uri.TryCreate(x, UriKind.Absolute, out _))) throw new InvalidOperationException("CORS requires explicit origins.");
+builder.Services.AddCors(options => options.AddPolicy("local", policy => policy.WithOrigins(origins).AllowCredentials().AllowAnyMethod().AllowAnyHeader().WithExposedHeaders("Content-Range", "Accept-Ranges", "ETag", "Content-Length")));
+builder.Services.AddRateLimiter(options =>
 {
-    var mongoClient = serviceProvider.GetRequiredService<IMongoClient>();
-    if (mongoClient == null)
-    {
-        return new MongoDbContext(null, "spotibuds");
-    }
-    return new MongoDbContext(mongoClient, "spotibuds");
+    options.RejectionStatusCode = 429;
+    options.AddPolicy("search", context => RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "local", _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
-
-builder.Services.AddScoped<IAzureBlobService, AzureBlobService>();
-
-var corsSection = builder.Configuration.GetSection("Cors");
-var allowedOrigins = corsSection["AllowedOrigins"];
-
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("SpotibudsPolicy", policy =>
-    {
-        if (allowedOrigins == "*")
-        {
-            policy.AllowAnyOrigin()
-                .AllowAnyHeader()
-                .AllowAnyMethod();
-        }
-        else
-        {
-            var origins = allowedOrigins?.Split(',') ?? Array.Empty<string>();
-            policy.WithOrigins(origins)
-                .AllowAnyHeader()
-                .AllowAnyMethod()
-                .AllowCredentials();
-        }
-    });
-});
-
-builder.WebHost.UseUrls($"http://0.0.0.0:80");
-
 var app = builder.Build();
-
-app.UseSwagger();
-app.UseSwaggerUI();
-
-// Disable HTTPS redirection for development
-if (app.Environment.IsProduction())
-{
-    app.UseHttpsRedirection();
-}
-
-app.UseCors("SpotibudsPolicy");
-
+// Resolve and validate configuration eagerly without gating on dependency network connectivity.
+_ = app.Services.GetRequiredService<AzureBlobService>();
 app.Use(async (context, next) =>
 {
-    context.Response.Headers["Access-Control-Allow-Origin"] = "*";
-    context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
-    context.Response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
-    
-    if (context.Request.Method == "OPTIONS")
+    try { await next(); }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+    catch (ApiException ex) { if (!context.Response.HasStarted) { context.Response.Clear(); context.Response.StatusCode = ex.Status; await context.Response.WriteAsJsonAsync(new { message = ex.Message }); } }
+    catch (MongoWriteException ex) when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey) { context.Response.Clear(); context.Response.StatusCode = 409; await context.Response.WriteAsJsonAsync(new { message = "An item with this identity already exists." }); }
+    catch (Exception ex) when (DemoRules.DependencyFailure(ex))
     {
-        context.Response.StatusCode = 200;
-        return;
-    }
-    
-    await next();
-});
-
-app.UseAuthentication();
-app.UseAuthorization();
-app.MapControllers();
-
-app.MapGet("/", () => "Music API is running!");
-app.MapGet("/health", () => new { status = "healthy", timestamp = DateTime.UtcNow });
-
-// MongoDB health check endpoint
-app.MapGet("/health/mongodb", async (MongoDbContext dbContext) =>
-{
-    try
-    {
-        if (!dbContext.IsConnected || dbContext.Songs == null)
-        {
-            return Results.Problem(
-                detail: "MongoDB is not connected",
-                title: "MongoDB Connection Failed",
-                statusCode: 503
-            );
-        }
-
-        var database = dbContext.Songs.Database;
-        await database.RunCommandAsync<MongoDB.Bson.BsonDocument>(new MongoDB.Bson.BsonDocument("ping", 1));
-        return Results.Ok(new { status = "healthy", service = "mongodb", timestamp = DateTime.UtcNow });
+        app.Logger.LogWarning("Music request dependency failure ({ErrorType}).", ex.GetType().Name);
+        if (!context.Response.HasStarted) { context.Response.Clear(); context.Response.StatusCode = 503; await context.Response.WriteAsJsonAsync(new { message = "A required dependency is temporarily unavailable. Retry shortly." }); }
+        else context.Abort();
     }
     catch (Exception ex)
     {
-        return Results.Problem(
-            detail: ex.Message,
-            title: "MongoDB Connection Failed",
-            statusCode: 503
-        );
+        app.Logger.LogError("Music request failed ({ErrorType}).", ex.GetType().Name);
+        if (!context.Response.HasStarted) { context.Response.Clear(); context.Response.StatusCode = 500; await context.Response.WriteAsJsonAsync(new { message = "The request could not be completed." }); }
+        else context.Abort();
     }
 });
-
-if (app.Environment.IsDevelopment())
+app.UseCors("local");
+app.UseRateLimiter();
+app.UseAuthentication();
+app.Use(async (context, next) =>
 {
-    // Detailed diagnostics are intentionally development-only: production health
-    // checks should not disclose dependency topology or exception details.
-    app.MapGet("/diagnostics/mongodb", async (IMongoClient mongoClient, MongoDbContext dbContext) =>
+    // A supplied session must not silently become anonymous when validation fails on a public read.
+    // Otherwise private owner lists look successfully empty and mask dependency outages.
+    if (context.Request.Headers.Authorization.Count > 0 && context.User.Identity?.IsAuthenticated != true)
     {
-        var diagnostics = new
-        {
-            timestamp = DateTime.UtcNow,
-            mongoClient = mongoClient != null ? "Available" : "Null",
-            dbContextConnected = dbContext.IsConnected,
-            connectionTest = false,
-            collections = new
-            {
-                songs = dbContext.Songs != null ? "Available" : "Null",
-                albums = dbContext.Albums != null ? "Available" : "Null",
-                artists = dbContext.Artists != null ? "Available" : "Null",
-                playlists = dbContext.Playlists != null ? "Available" : "Null"
-            },
-            error = (string?)null
-        };
-
-        try
-        {
-            if (mongoClient == null)
-            {
-                return Results.Ok(new
-                {
-                    diagnostics.timestamp,
-                    diagnostics.mongoClient,
-                    diagnostics.dbContextConnected,
-                    diagnostics.collections,
-                    error = "MongoDB client is null"
-                });
-            }
-
-            if (!dbContext.IsConnected)
-            {
-                return Results.Ok(new
-                {
-                    diagnostics.timestamp,
-                    diagnostics.mongoClient,
-                    diagnostics.dbContextConnected,
-                    diagnostics.collections,
-                    error = "MongoDB context is not connected"
-                });
-            }
-
-            var connectionTest = await dbContext.TestConnectionAsync();
-
-            return Results.Ok(new
-            {
-                diagnostics.timestamp,
-                diagnostics.mongoClient,
-                diagnostics.dbContextConnected,
-                connectionTest,
-                diagnostics.collections,
-                diagnostics.error
-            });
-        }
-        catch (Exception ex)
-        {
-            return Results.Ok(new
-            {
-                diagnostics.timestamp,
-                diagnostics.mongoClient,
-                diagnostics.dbContextConnected,
-                diagnostics.collections,
-                error = ex.Message
-            });
-        }
-    });
-}
-
-
-
+        var unavailable = context.Items.ContainsKey("identityUnavailable");
+        context.Response.StatusCode = unavailable ? 503 : 401;
+        if (!unavailable) context.Response.Headers.WWWAuthenticate = "Bearer";
+        await context.Response.WriteAsJsonAsync(new { message = unavailable ? "Session validation is temporarily unavailable." : "The supplied session is invalid or revoked." });
+        return;
+    }
+    await next();
+});
+app.UseAuthorization();
+app.MapControllers();
+app.MapGet("/", () => new { service = "Music" });
+app.MapGet("/health", () => Results.Ok(new { status = "live" }));
+app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
+app.MapGet("/health/ready", async (MongoDbContext db, AzureBlobService storage, MaintenanceState state, CancellationToken ct) =>
+{
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(3));
+    try { if (state.Initialized && await db.TestConnectionAsync(timeout.Token) && await storage.Ready(timeout.Token)) return Results.Ok(new { status = "ready" }); }
+    catch (OperationCanceledException) { }
+    return Results.Json(new { status = "unavailable" }, statusCode: 503);
+});
 app.Run();
+public partial class Program { }

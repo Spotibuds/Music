@@ -1,471 +1,164 @@
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
-using Azure.Storage.Sas;
+using Microsoft.AspNetCore.Http;
+using SkiaSharp;
+using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Text;
 
 namespace Music.Services;
 
-public interface IAzureBlobService
-{
-    Task<string> UploadSongAsync(string songId, Stream fileStream, string fileName);
-    Task<string> UploadSongCoverAsync(string songId, Stream imageStream, string fileName);
-    Task<string> UploadSongSnippetAsync(string songId, Stream audioStream, string fileName);
-    Task<string> UploadArtistImageAsync(string artistId, Stream imageStream, string fileName);
-    Task<string> UploadAlbumCoverAsync(string albumId, Stream imageStream, string fileName);
-    Task<string> UploadPlaylistCoverAsync(string playlistId, Stream imageStream, string fileName);
-    Task<Stream> DownloadFileAsync(string containerName, string blobName);
-    Task<bool> DeleteFileAsync(string containerName, string blobName);
-    Task<bool> DeleteSongFilesAsync(string songId);
-    Task<bool> DeleteArtistFilesAsync(string artistId);
-    Task<bool> DeleteAlbumFilesAsync(string albumId);
-    Task<bool> DeleteSongAudioFilesAsync(string songId);
-    Task<bool> DeleteSongCoverFilesAsync(string songId);
-    Task<bool> DeleteSongSnippetFilesAsync(string songId);
-    Task<bool> DeleteArtistImageFilesAsync(string artistId);
-    Task<bool> DeleteAlbumCoverFilesAsync(string albumId);
-    Task<bool> DeletePlaylistCoverFilesAsync(string playlistId);
-    Task<List<string>> ListFilesAsync(string containerName, string prefix = "");
-    BlobContainerClient GetBlobContainerClient(string containerName);
-    string GenerateSasUrl(string containerName, string blobName, TimeSpan? expiry = null);
-    Task UpdateContainerAccessLevelAsync(string containerName);
-}
+public record MediaTarget(string Container, string Blob, string Url);
+public record ValidatedMedia(byte[] Bytes, string Extension, string ContentType, double? Duration = null);
 
-public class AzureBlobService : IAzureBlobService
+public sealed class AzureBlobService
 {
-    private readonly BlobServiceClient? _blobServiceClient;
-    private readonly string _songsContainer;
-    private readonly string _artistsContainer;
-    private readonly string _albumsContainer;
-    private readonly string _playlistsContainer;
-    private readonly bool _isConfigured;
-
+    private readonly BlobServiceClient client;
+    private readonly Uri publicBase;
+    private readonly HashSet<string> containers;
+    private readonly IConfiguration configuration;
     public AzureBlobService(IConfiguration configuration)
     {
-        var connectionString = configuration["AzureStorage:ConnectionString"];
-        _isConfigured = !string.IsNullOrEmpty(connectionString);
-        
-        if (_isConfigured)
+        this.configuration = configuration;
+        var connection = configuration["AzureStorage:ConnectionString"];
+        if (string.IsNullOrWhiteSpace(connection)) throw new InvalidOperationException("AzureStorage:ConnectionString is required.");
+        client = new BlobServiceClient(connection, new BlobClientOptions { Retry = { MaxRetries = 1, NetworkTimeout = TimeSpan.FromSeconds(10) } });
+        publicBase = new Uri(configuration["AzureStorage:PublicBaseUrl"] ?? throw new InvalidOperationException("AzureStorage:PublicBaseUrl is required."));
+        if (publicBase.Scheme is not ("http" or "https")) throw new InvalidOperationException("Invalid storage public base URL.");
+        containers = [Container("songs"), Container("artists"), Container("albums"), Container("playlists")];
+    }
+    public string Container(string kind)
+    {
+        var value = configuration[$"AzureStorage:{char.ToUpperInvariant(kind[0])}{kind[1..]}Container"];
+        value = string.IsNullOrWhiteSpace(value) ? kind : value;
+        if (!System.Text.RegularExpressions.Regex.IsMatch(value, "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")) throw new InvalidOperationException("Invalid storage container configuration.");
+        return value;
+    }
+    public string Url(string container, string blob) => $"{publicBase.ToString().TrimEnd('/')}/api/media/blob/{container}/{string.Join('/', blob.Split('/').Select(Uri.EscapeDataString))}";
+    public MediaTarget Prepare(string kind, string id, string purpose, string extension)
+    {
+        var container = Container(kind);
+        var blob = $"{DemoRules.Id(id)}/{purpose}/{Guid.NewGuid():N}{extension}";
+        return new(container, blob, Url(container, blob));
+    }
+    public bool TryResolve(string? value, out MediaTarget target)
+    {
+        target = new("", "", "");
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) return false;
+        string path;
+        if (uri.GetLeftPart(UriPartial.Authority) == publicBase.GetLeftPart(UriPartial.Authority) && uri.AbsolutePath.StartsWith("/api/media/blob/", StringComparison.Ordinal)) path = uri.AbsolutePath[16..];
+        else if (uri.GetLeftPart(UriPartial.Authority) == client.Uri.GetLeftPart(UriPartial.Authority) && uri.AbsolutePath.StartsWith(client.Uri.AbsolutePath.TrimEnd('/') + "/", StringComparison.Ordinal)) path = uri.AbsolutePath[(client.Uri.AbsolutePath.TrimEnd('/').Length + 1)..];
+        else return false;
+        var pieces = path.Split('/', 2);
+        if (pieces.Length != 2 || !containers.Contains(pieces[0])) return false;
+        var blob = Uri.UnescapeDataString(pieces[1]);
+        if (blob.Split('/').Any(x => x is ".." or "." or "") || blob.Contains('\\')) return false;
+        target = new(pieces[0], blob, Url(pieces[0], blob));
+        return true;
+    }
+    public BlobClient Blob(MediaTarget target)
+    {
+        if (!containers.Contains(target.Container)) throw new ApiException(404, "Media not found.");
+        return client.GetBlobContainerClient(target.Container).GetBlobClient(target.Blob);
+    }
+    public async Task Upload(MediaTarget target, ValidatedMedia media, CancellationToken ct)
+    {
+        var container = client.GetBlobContainerClient(target.Container);
+        await container.CreateIfNotExistsAsync(PublicAccessType.None, cancellationToken: ct);
+        using var stream = new MemoryStream(media.Bytes, false);
+        await container.GetBlobClient(target.Blob).UploadAsync(stream, new BlobUploadOptions { HttpHeaders = new BlobHttpHeaders { ContentType = media.ContentType, CacheControl = "no-cache" } }, ct);
+    }
+    public async Task Delete(MediaTarget target, CancellationToken ct) => await Blob(target).DeleteIfExistsAsync(cancellationToken: ct);
+    public async Task<bool> Ready(CancellationToken ct)
+    {
+        try { await client.GetPropertiesAsync(ct); return true; }
+        catch (Azure.RequestFailedException) { return false; }
+        catch (HttpRequestException) { return false; }
+    }
+    public async Task<ValidatedMedia> Validate(IFormFile file, bool image, CancellationToken ct)
+    {
+        var max = image ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+        if (file.Length is <= 0 || file.Length > max) throw new ApiException(400, image ? "Image must be 1 byte to 10 MiB." : "Audio must be 1 byte to 50 MiB.");
+        await using var input = file.OpenReadStream();
+        using var memory = new MemoryStream((int)file.Length);
+        await input.CopyToAsync(memory, ct);
+        if (memory.Length > max) throw new ApiException(400, "File is too large.");
+        var bytes = memory.ToArray();
+        if (image)
         {
-            _blobServiceClient = new BlobServiceClient(connectionString);
-        }
-
-        _songsContainer = configuration["AzureStorage:SongsContainer"] ?? "songs";
-        _artistsContainer = configuration["AzureStorage:ArtistsContainer"] ?? "artists";
-        _albumsContainer = configuration["AzureStorage:AlbumsContainer"] ?? "albums";
-        _playlistsContainer = configuration["AzureStorage:PlaylistsContainer"] ?? "playlists";
-    }
-
-    public async Task<string> UploadSongAsync(string songId, Stream fileStream, string fileName)
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
-
-        var fileGuid = Guid.NewGuid().ToString();
-        var fileExtension = Path.GetExtension(fileName).ToLower();
-        var blobName = $"{songId}/song/{fileGuid}{fileExtension}";
-
-        var blobClient = containerClient.GetBlobClient(blobName);
-        await blobClient.UploadAsync(fileStream, overwrite: true);
-
-        return GenerateSasUrl(_songsContainer, blobName, TimeSpan.FromDays(365)); // Long-lived URL for songs
-    }
-
-    public async Task<string> UploadSongCoverAsync(string songId, Stream imageStream, string fileName)
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
-
-        var imageGuid = Guid.NewGuid().ToString();
-        var blobName = $"{songId}/cover/{imageGuid}.jpg";
-
-        var blobClient = containerClient.GetBlobClient(blobName);
-        await blobClient.UploadAsync(imageStream, overwrite: true);
-
-        return GenerateSasUrl(_songsContainer, blobName, TimeSpan.FromDays(365));
-    }
-
-    public async Task<string> UploadSongSnippetAsync(string songId, Stream audioStream, string fileName)
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
-
-        var snippetGuid = Guid.NewGuid().ToString();
-        var blobName = $"{songId}/snippet/{snippetGuid}.mp3";
-
-        var blobClient = containerClient.GetBlobClient(blobName);
-        await blobClient.UploadAsync(audioStream, overwrite: true);
-
-        return GenerateSasUrl(_songsContainer, blobName, TimeSpan.FromDays(365));
-    }
-
-    public async Task<string> UploadArtistImageAsync(string artistId, Stream imageStream, string fileName)
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(_artistsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
-
-        var imageGuid = Guid.NewGuid().ToString();
-        var blobName = $"{artistId}/profilePicture/{imageGuid}.jpg";
-
-        var blobClient = containerClient.GetBlobClient(blobName);
-        await blobClient.UploadAsync(imageStream, overwrite: true);
-
-        return GenerateSasUrl(_artistsContainer, blobName, TimeSpan.FromDays(365));
-    }
-
-    public async Task<string> UploadAlbumCoverAsync(string albumId, Stream imageStream, string fileName)
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(_albumsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
-
-        var coverGuid = Guid.NewGuid().ToString();
-        var blobName = $"{albumId}/cover/{coverGuid}.jpg";
-
-        var blobClient = containerClient.GetBlobClient(blobName);
-        await blobClient.UploadAsync(imageStream, overwrite: true);
-
-        return GenerateSasUrl(_albumsContainer, blobName, TimeSpan.FromDays(365));
-    }
-
-    public async Task<string> UploadPlaylistCoverAsync(string playlistId, Stream imageStream, string fileName)
-    {
-        if (!_isConfigured || _blobServiceClient == null)
-        {
-            // Return a placeholder URL for development when Azure Storage is not configured
-            return $"https://placeholder.dev/400x400/purple/white?text=Playlist+{playlistId.Substring(0, 8)}";
-        }
-
-        var containerClient = _blobServiceClient.GetBlobContainerClient(_playlistsContainer);
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
-
-        var coverGuid = Guid.NewGuid().ToString();
-        var blobName = $"{playlistId}/cover/{coverGuid}.jpg";
-
-        var blobClient = containerClient.GetBlobClient(blobName);
-        await blobClient.UploadAsync(imageStream, overwrite: true);
-
-        return GenerateSasUrl(_playlistsContainer, blobName, TimeSpan.FromDays(365));
-    }
-
-    public async Task<Stream> DownloadFileAsync(string containerName, string blobName)
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-        var blobClient = containerClient.GetBlobClient(blobName);
-
-        var response = await blobClient.DownloadStreamingAsync();
-        return response.Value.Content;
-    }
-
-    public async Task<bool> DeleteFileAsync(string containerName, string blobName)
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-        var blobClient = containerClient.GetBlobClient(blobName);
-
-        var response = await blobClient.DeleteIfExistsAsync();
-        return response.Value;
-    }
-
-    public async Task<bool> DeleteSongFilesAsync(string songId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-            var prefix = $"{songId}/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+            using var data = SKData.CreateCopy(bytes);
+            using var codec = SKCodec.Create(data);
+            if (codec is null) throw new ApiException(400, "Invalid image content.");
+            var format = codec.EncodedFormat;
+            if (format is not (SKEncodedImageFormat.Png or SKEncodedImageFormat.Jpeg or SKEncodedImageFormat.Webp)) throw new ApiException(400, "Supported images: PNG, JPEG, WebP.");
+            var info = codec.Info;
+            if (info.Width <= 0 || info.Height <= 0 || info.Width > 4096 || info.Height > 4096 || (long)info.Width * info.Height > 16000000) throw new ApiException(400, "Image dimensions are too large.");
+            if (codec.FrameCount > 1) throw new ApiException(400, "A static image is required.");
+            using var bitmap = new SKBitmap(info);
+            if (codec.GetPixels(info, bitmap.GetPixels()) != SKCodecResult.Success) throw new ApiException(400, "Invalid image content.");
+            return format switch
             {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeleteArtistFilesAsync(string artistId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_artistsContainer);
-            var prefix = $"{artistId}/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeleteAlbumFilesAsync(string albumId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_albumsContainer);
-            var prefix = $"{albumId}/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeleteSongAudioFilesAsync(string songId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-            var prefix = $"{songId}/song/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeleteSongCoverFilesAsync(string songId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-            var prefix = $"{songId}/cover/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeleteSongSnippetFilesAsync(string songId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_songsContainer);
-            var prefix = $"{songId}/snippet/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeleteArtistImageFilesAsync(string artistId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_artistsContainer);
-            var prefix = $"{artistId}/profilePicture/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeleteAlbumCoverFilesAsync(string albumId)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_albumsContainer);
-            var prefix = $"{albumId}/cover/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<bool> DeletePlaylistCoverFilesAsync(string playlistId)
-    {
-        if (!_isConfigured || _blobServiceClient == null)
-        {
-            // Return true for development when Azure Storage is not configured
-            return true;
-        }
-
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_playlistsContainer);
-            var prefix = $"{playlistId}/cover/";
-            
-            var deletedCount = 0;
-            await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-            {
-                var blobClient = containerClient.GetBlobClient(blobItem.Name);
-                var deleted = await blobClient.DeleteIfExistsAsync();
-                if (deleted.Value) deletedCount++;
-            }
-            
-            return deletedCount > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    public async Task<List<string>> ListFilesAsync(string containerName, string prefix = "")
-    {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-        var blobs = new List<string>();
-
-        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
-        {
-            blobs.Add(blobItem.Name);
-        }
-
-        return blobs;
-    }
-
-    public BlobContainerClient GetBlobContainerClient(string containerName)
-    {
-        return _blobServiceClient.GetBlobContainerClient(containerName);
-    }
-
-    public string GenerateSasUrl(string containerName, string blobName, TimeSpan? expiry = null)
-    {
-        try
-        {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-            var blobClient = containerClient.GetBlobClient(blobName);
-
-            Console.WriteLine($"Attempting to generate SAS URL for: {containerName}/{blobName}");
-            Console.WriteLine($"CanGenerateSasUri: {blobClient.CanGenerateSasUri}");
-            Console.WriteLine($"Blob URI: {blobClient.Uri}");
-
-            // Check if we can generate SAS (requires account key)
-            if (!blobClient.CanGenerateSasUri)
-            {
-                Console.WriteLine($"ERROR: Cannot generate SAS URI for {containerName}/{blobName}");
-                Console.WriteLine($"This usually indicates:");
-                Console.WriteLine($"1. Connection string doesn't include AccountKey");
-                Console.WriteLine($"2. Using managed identity without delegation");
-                Console.WriteLine($"3. Storage account configuration issue");
-                
-                // Try to extract account name from URI for debugging
-                var uri = blobClient.Uri.ToString();
-                Console.WriteLine($"Storage account URI: {uri}");
-                
-                throw new InvalidOperationException($"Cannot generate SAS URI for blob {blobName}. Check connection string and Azure Storage account configuration.");
-            }
-
-            var sasBuilder = new BlobSasBuilder
-            {
-                BlobContainerName = containerName,
-                BlobName = blobName,
-                Resource = "b", // blob resource
-                ExpiresOn = DateTimeOffset.UtcNow.Add(expiry ?? TimeSpan.FromDays(365)) // Long-lived for media files
+                SKEncodedImageFormat.Png => new(bytes, ".png", "image/png"),
+                SKEncodedImageFormat.Webp => new(bytes, ".webp", "image/webp"),
+                _ => new(bytes, ".jpg", "image/jpeg")
             };
-
-            sasBuilder.SetPermissions(BlobSasPermissions.Read);
-
-            var sasUrl = blobClient.GenerateSasUri(sasBuilder).ToString();
-            Console.WriteLine($"SUCCESS: Generated SAS URL for {containerName}/{blobName}");
-            return sasUrl;
         }
-        catch (Exception ex)
+        if (bytes.Length >= 12 && Encoding.ASCII.GetString(bytes, 0, 4) == "RIFF" && Encoding.ASCII.GetString(bytes, 8, 4) == "WAVE")
         {
-            Console.WriteLine($"EXCEPTION generating SAS URL for {containerName}/{blobName}: {ex.Message}");
-            Console.WriteLine($"Exception type: {ex.GetType().Name}");
-            throw;
+            var duration = ValidateWave(bytes);
+            return new(bytes, ".wav", "audio/wav", duration);
         }
-    }
-
-    public async Task UpdateContainerAccessLevelAsync(string containerName)
-    {
+        string ext, contentType;
+        if (bytes.Length >= 4 && Encoding.ASCII.GetString(bytes, 0, 4) == "fLaC") { ext = ".flac"; contentType = "audio/flac"; }
+        else if (bytes.Length >= 4 && Encoding.ASCII.GetString(bytes, 0, 4) == "OggS") { ext = ".ogg"; contentType = "audio/ogg"; }
+        else if (bytes.Length >= 3 && (Encoding.ASCII.GetString(bytes, 0, 3) == "ID3" || (bytes[0] == 0xff && (bytes[1] & 0xe0) == 0xe0))) { ext = ".mp3"; contentType = "audio/mpeg"; }
+        else throw new ApiException(400, "Supported audio: PCM WAV, MP3, FLAC, Ogg.");
+        var path = Path.Combine(Path.GetTempPath(), $"spotibuds-{Guid.NewGuid():N}{ext}");
         try
         {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-            
-            // Check if container exists
-            var exists = await containerClient.ExistsAsync();
-            if (!exists.Value)
-            {
-                Console.WriteLine($"Container {containerName} does not exist, creating with public blob access");
-                await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
-                return;
-            }
-
-            // Update existing container to allow public blob access
-            await containerClient.SetAccessPolicyAsync(PublicAccessType.Blob);
-            Console.WriteLine($"Updated container {containerName} to allow public blob access");
+            await File.WriteAllBytesAsync(path, bytes, ct);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            var start = new ProcessStartInfo(configuration["Media:DecoderPath"] ?? "ffmpeg") { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            foreach (var arg in new[] { "-nostdin", "-v", "error", "-xerror", "-threads", "1", "-i", path, "-map", "0:a:0", "-f", "null", "-" }) start.ArgumentList.Add(arg);
+            using var process = Process.Start(start) ?? throw new ApiException(503, "Audio decoder is unavailable.");
+            var error = process.StandardError.ReadToEndAsync(timeout.Token);
+            var output = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException) { process.Kill(true); throw new ApiException(400, "Audio decoding exceeded its time limit."); }
+            await Task.WhenAll(error, output);
+            if (process.ExitCode != 0) throw new ApiException(400, "Invalid audio content.");
+            return new(bytes, ext, contentType);
         }
-        catch (Exception ex)
+        catch (System.ComponentModel.Win32Exception) { throw new ApiException(503, "Audio decoder is unavailable; install ffmpeg or use PCM WAV."); }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+    public static double ValidateWave(byte[] bytes)
+    {
+        if (bytes.Length < 44 || BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4, 4)) + 8L != bytes.Length) throw new ApiException(400, "Invalid WAV length.");
+        var offset = 12; int byteRate = 0; ushort blockAlign = 0; long dataLength = 0;
+        while (offset + 8 <= bytes.Length)
         {
-            Console.WriteLine($"Error updating container access level for {containerName}: {ex.Message}");
-            throw;
+            var type = Encoding.ASCII.GetString(bytes, offset, 4);
+            var size = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 4, 4));
+            if (offset + 8L + size > bytes.Length) throw new ApiException(400, "Truncated WAV chunk.");
+            if (type == "fmt ")
+            {
+                if (size < 16) throw new ApiException(400, "Invalid WAV format.");
+                var format = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 8, 2));
+                var channels = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 10, 2));
+                var sampleRate = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 12, 4));
+                byteRate = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 16, 4));
+                blockAlign = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 20, 2));
+                var bits = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 22, 2));
+                if (format != 1 || channels is < 1 or > 2 || sampleRate is < 8000 or > 192000 || bits is not (8 or 16 or 24 or 32) || blockAlign != channels * bits / 8 || byteRate != sampleRate * blockAlign) throw new ApiException(400, "Supported WAV: mono/stereo PCM, 8..192 kHz, 8/16/24/32 bits.");
+            }
+            if (type == "data") dataLength += size;
+            offset = checked((int)(offset + 8L + size + (size % 2)));
         }
+        if (offset != bytes.Length || byteRate <= 0 || dataLength <= 0 || dataLength % blockAlign != 0) throw new ApiException(400, "Invalid WAV data.");
+        var duration = (double)dataLength / byteRate;
+        if (duration > 7200) throw new ApiException(400, "Audio duration must not exceed 2 hours.");
+        return duration;
     }
 }

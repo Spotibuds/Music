@@ -5,6 +5,8 @@ namespace Music.Models;
 
 public class Song
 {
+    [BsonElement("albumPosition")]
+    public int AlbumPosition { get; set; }
     [BsonId]
     [BsonRepresentation(BsonType.ObjectId)]
     public string Id { get; set; } = ObjectId.GenerateNewId().ToString();
@@ -56,4 +58,4 @@ public class AlbumReference
 
     [BsonElement("title")]
     public string Title { get; set; } = string.Empty;
-} 
+}

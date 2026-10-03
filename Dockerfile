@@ -1,20 +1,16 @@
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
-WORKDIR /app
-EXPOSE 80
-EXPOSE 8081
-
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
 WORKDIR /src
-COPY ["Music.csproj", "."]
-RUN dotnet restore "Music.csproj"
+COPY Music.csproj packages.lock.json ./
+RUN dotnet restore Music.csproj --locked-mode
 COPY . .
-WORKDIR "/src"
-RUN dotnet build "Music.csproj" -c Release -o /app/build
+RUN dotnet publish Music.csproj -c Release -o /out --no-restore /p:UseAppHost=false
 
-FROM build AS publish
-RUN dotnet publish "Music.csproj" -c Release -o /app/publish /p:UseAppHost=false
-
-FROM base AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.12
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=publish /app/publish .
-ENTRYPOINT ["dotnet", "Music.dll"] 
+COPY --from=build /out ./
+ENV ASPNETCORE_HTTP_PORTS=8080
+EXPOSE 8080
+USER $APP_UID
+ENTRYPOINT ["dotnet", "Music.dll"]

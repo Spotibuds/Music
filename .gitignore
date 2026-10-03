@@ -184,4 +184,9 @@ jspm_packages/
 
 # Temporary folders
 tmp/
-temp/ 
+temp/
+# Ignored local configuration contains only freshly generated demo credentials.
+appsettings.Local.json
+.env.*
+!.env.example
+TestResults/
