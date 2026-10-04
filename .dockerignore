@@ -6,3 +6,4 @@ tests
 .env*
 appsettings.Local.json
 *.log
+scripts/telegram-download

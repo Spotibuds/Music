@@ -113,6 +113,7 @@ public sealed class AzureBlobService
         else if (bytes.Length >= 4 && Encoding.ASCII.GetString(bytes, 0, 4) == "OggS") { ext = ".ogg"; contentType = "audio/ogg"; }
         else if (bytes.Length >= 3 && (Encoding.ASCII.GetString(bytes, 0, 3) == "ID3" || (bytes[0] == 0xff && (bytes[1] & 0xe0) == 0xe0))) { ext = ".mp3"; contentType = "audio/mpeg"; }
         else throw new ApiException(400, "Supported audio: PCM WAV, MP3, FLAC, Ogg.");
+        if (ext == ".mp3") bytes = Mp3Playback.AudioOnly(bytes);
         var path = Path.Combine(Path.GetTempPath(), $"spotibuds-{Guid.NewGuid():N}{ext}");
         try
         {

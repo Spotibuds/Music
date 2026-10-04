@@ -60,7 +60,6 @@ public sealed class PlaylistService(MongoDbContext db, MutationGate gate, MediaC
     {
         var owner = DemoRules.Actor(viewer);
         if (expectedOwner is not null && owner != expectedOwner) throw new ApiException(403, "You may create playlists only for your own account.");
-        if (await db.Playlists.CountDocumentsAsync(x => x.CreatedBy == owner, cancellationToken: ct) >= 100) throw new ApiException(400, "An account supports at most 100 playlists.");
         // Case-insensitive liked-list creation is idempotent so concurrent first likes cannot create two lists.
         var name = DemoRules.Text(dto.Name, "Name", 200);
         if (name.Equals("Liked Songs", StringComparison.OrdinalIgnoreCase))
@@ -69,6 +68,7 @@ public sealed class PlaylistService(MongoDbContext db, MutationGate gate, MediaC
             if (liked is not null) return liked;
             name = "Liked Songs";
         }
+        if (await db.Playlists.CountDocumentsAsync(x => x.CreatedBy == owner, cancellationToken: ct) >= 100) throw new ApiException(400, "An account supports at most 100 playlists.");
         var playlist = new Playlist { Name = name, Description = DemoRules.Text(dto.Description, "Description", 2000, false), CreatedBy = owner, IsPublic = dto.IsPublic };
         await db.Playlists.InsertOneAsync(playlist, cancellationToken: ct);
         return playlist;
@@ -84,7 +84,13 @@ public sealed class PlaylistService(MongoDbContext db, MutationGate gate, MediaC
     public Task<bool> Update(string id, UpdatePlaylistDto dto, ClaimsPrincipal viewer, CancellationToken ct) => gate.Run(async () =>
     {
         var p = await Find(id, viewer, true, ct); var version = p.Version;
-        if (dto.Name is not null) p.Name = DemoRules.Text(dto.Name, "Name", 200);
+        if (dto.Name is not null)
+        {
+            var name = DemoRules.Text(dto.Name, "Name", 200);
+            if (p.Name == "Liked Songs" && name != "Liked Songs") throw new ApiException(400, "Liked Songs keeps its name so your favorites stay together.");
+            if (p.Name != "Liked Songs" && name.Equals("Liked Songs", StringComparison.OrdinalIgnoreCase)) throw new ApiException(400, "Liked Songs is reserved for your favorites.");
+            p.Name = name;
+        }
         if (dto.Description is not null) p.Description = DemoRules.Text(dto.Description, "Description", 2000, false);
         if (dto.IsPublic.HasValue) p.IsPublic = dto.IsPublic.Value;
         await Persist(p, version, ct); return true;

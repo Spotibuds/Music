@@ -190,3 +190,7 @@ appsettings.Local.json
 .env.*
 !.env.example
 TestResults/
+__pycache__/
+
+# Local Telegram tooling, sessions, and downloaded music stay off GitHub.
+/scripts/telegram-download/
